@@ -573,6 +573,48 @@ async function loadTesseract() {
   });
 }
 
+// Helper: crop + scale a region from a canvas
+function cropRegion(src, yStart, yEnd, scale) {
+  const sw = src.width, sh = src.height;
+  const sy = Math.floor(sh * yStart);
+  const sH = Math.floor(sh * (yEnd - yStart));
+  const c = document.createElement('canvas');
+  c.width = sw * scale; c.height = sH * scale;
+  c.getContext('2d').drawImage(src, 0, sy, sw, sH, 0, 0, c.width, c.height);
+  return c;
+}
+
+// Helper: grayscale + adaptive-ish threshold (per-tile mean)
+function preprocessCrop(c) {
+  const ctx = c.getContext('2d');
+  const id = ctx.getImageData(0, 0, c.width, c.height);
+  const d = id.data, W = c.width, H = c.height;
+  // Convert to grayscale first
+  const gray = new Uint8Array(W * H);
+  for (let i = 0; i < d.length; i += 4) {
+    gray[i >> 2] = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+  }
+  // Adaptive threshold: per-pixel compare to local 15×15 mean
+  const R = 15;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let sum = 0, cnt = 0;
+      for (let dy = -R; dy <= R; dy++) {
+        for (let dx = -R; dx <= R; dx++) {
+          const ny = y + dy, nx = x + dx;
+          if (ny >= 0 && ny < H && nx >= 0 && nx < W) { sum += gray[ny * W + nx]; cnt++; }
+        }
+      }
+      const thresh = (sum / cnt) - 10;
+      const v = gray[y * W + x] > thresh ? 255 : 0;
+      const i = (y * W + x) * 4;
+      d[i] = d[i+1] = d[i+2] = v; d[i+3] = 255;
+    }
+  }
+  ctx.putImageData(id, 0, 0);
+  return c;
+}
+
 async function processOCR(canvas) {
   ocrOverlay.classList.add('show');
   detPopup.classList.remove('show');
@@ -580,54 +622,38 @@ async function processOCR(canvas) {
   try {
     await loadTesseract();
 
-    // Scale 2× the full card for better OCR accuracy
-    const scaled = document.createElement('canvas');
-    const sctx   = scaled.getContext('2d');
-    scaled.width  = canvas.width * 2;
-    scaled.height = canvas.height * 2;
-    sctx.drawImage(canvas, 0, 0, scaled.width, scaled.height);
-
-    // Grayscale + contrast boost
-    const id = sctx.getImageData(0, 0, scaled.width, scaled.height);
-    const d  = id.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-      const v = g > 128 ? 255 : 0;
-      d[i] = d[i+1] = d[i+2] = v;
-    }
-    sctx.putImageData(id, 0, 0);
-
-    ocrMsg.textContent = 'Lendo carta inteira...';
-
-    // Pass 1: full card with letters + digits to get name and number
-    const { data } = await Tesseract.recognize(scaled, 'eng', {
-      tessedit_pageseg_mode: '3',
+    // ── Pass 1: topo da carta (0–14%) → nome do Pokémon ──────────────────
+    ocrMsg.textContent = 'Lendo nome...';
+    const nameCanvas = preprocessCrop(cropRegion(canvas, 0, 0.14, 4));
+    const { data: nameData } = await Tesseract.recognize(nameCanvas, 'eng', {
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz2- ',
+      tessedit_pageseg_mode: '7',   // single text line
     });
 
-    const rawText = data.text || '';
-
-    // Extract card number (X/Y or X) — usually at the bottom
-    const numMatch = rawText.match(/(\d{1,4})\/(\d{1,4})/) || rawText.match(/\b(\d{1,4})\b/);
-    const detectedNum = numMatch ? numMatch[0] : '';
-
-    // Extract Pokémon name — first token of ≥ 3 alpha chars on its own line (top of card)
-    // Pokémon name is typically on the first 1-2 lines, mixed/title case, 3+ letters
-    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+    const nameRaw = (nameData.text || '').trim();
+    // Pega a primeira palavra com ≥ 3 letras (filtra lixo OCR curto)
     let detectedName = '';
-    for (const line of lines.slice(0, 6)) {
-      // Skip lines that are mostly digits or look like HP/number lines
-      const alpha = line.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, '');
-      if (alpha.length >= 3 && !/^\d/.test(line) && !/HP/i.test(line)) {
-        // Grab the first word that looks like a name (title-case or all-caps)
-        const word = line.split(/\s+/).find(w => /^[A-ZÀ-Ö][a-zA-ZÀ-ÿ]{2,}$/.test(w) || /^[A-Z]{3,}$/.test(w));
-        if (word) { detectedName = word; break; }
-      }
+    for (const token of nameRaw.split(/\s+/)) {
+      const clean = token.replace(/[^A-Za-z2-]/g, '');
+      if (clean.length >= 3) { detectedName = clean; break; }
     }
+
+    // ── Pass 2: rodapé da carta (90–100%) → número X/Y ──────────────────
+    ocrMsg.textContent = 'Lendo número...';
+    const numCanvas = preprocessCrop(cropRegion(canvas, 0.90, 1.0, 4));
+    const { data: numData } = await Tesseract.recognize(numCanvas, 'eng', {
+      tessedit_char_whitelist: '0123456789/',
+      tessedit_pageseg_mode: '7',
+    });
+
+    const numRaw = (numData.text || '').replace(/\s+/g, '');
+    const numMatch = numRaw.match(/(\d{1,4})\/(\d{1,4})/) || numRaw.match(/(\d{1,4})/);
+    const detectedNum = numMatch ? numMatch[0] : '';
 
     ocrOverlay.classList.remove('show');
 
     if (detectedNum || detectedName) {
-      lastDetected = detectedNum || '';
+      lastDetected     = detectedNum || '';
       lastDetectedName = detectedName || '';
       detNum.textContent = detectedNum || '—';
       document.getElementById('det-name').textContent = detectedName ? '🎴 ' + detectedName : '';
