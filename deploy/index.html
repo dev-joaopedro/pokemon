@@ -1,0 +1,643 @@
+﻿<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Pokémon Card Scanner</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --gold: #f7c948;
+    --orange: #ff8c00;
+    --bg: #0e0e1a;
+    --surface: #18182a;
+    --surface2: #22223a;
+    --border: #2e2e4e;
+    --text: #e8e8f8;
+    --muted: #7878a0;
+    --radius: 14px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    padding: 24px 16px 48px;
+    max-width: 520px;
+    margin: 0 auto;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Header ── */
+  header { text-align: center; margin-bottom: 28px; }
+  .logo { font-size: 36px; margin-bottom: 6px; }
+  h1 {
+    font-size: 22px; font-weight: 800;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -0.5px;
+  }
+  .subtitle { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* ── Search row ── */
+  .search-row { display: flex; gap: 10px; margin-bottom: 6px; }
+  #code {
+    flex: 1; padding: 15px 16px; font-size: 17px;
+    background: var(--surface); border: 1.5px solid var(--border);
+    border-radius: var(--radius); color: var(--text); outline: none;
+    transition: border-color .2s;
+  }
+  #code:focus { border-color: var(--gold); }
+  #code::placeholder { color: var(--muted); }
+
+  #scan-btn {
+    width: 56px; height: 56px; border: none;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    border-radius: var(--radius); font-size: 24px; cursor: pointer;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    transition: transform .12s, opacity .12s;
+    box-shadow: 0 4px 16px rgba(247,201,72,.35);
+  }
+  #scan-btn:active { transform: scale(.93); opacity: .85; }
+
+  /* ── Dropdown ── */
+  .dd-wrap { position: relative; }
+  #dropdown {
+    display: none; position: absolute; left: 0; right: 0; top: 4px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); max-height: 340px; overflow-y: auto;
+    z-index: 50; box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  }
+  .suggestion {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 14px; cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  .suggestion:last-child { border-bottom: none; }
+  .suggestion:active, .suggestion:hover { background: var(--surface2); }
+  .suggestion img { width: 38px; height: 52px; object-fit: cover; border-radius: 5px; flex-shrink: 0; }
+  .suggestion .name { font-size: 14px; font-weight: 700; }
+  .suggestion .set  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Status ── */
+  #status { font-size: 13px; color: var(--muted); min-height: 20px; margin: 10px 0 4px; text-align: center; }
+
+  /* ── Result ── */
+  #result {
+    display: none; background: var(--surface); border-radius: 18px;
+    border: 1px solid var(--border); padding: 18px; margin-top: 14px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  }
+  .result-row { display: flex; gap: 16px; }
+  #card-img {
+    width: 130px; border-radius: 10px; flex-shrink: 0;
+    box-shadow: 0 6px 24px rgba(0,0,0,.7);
+  }
+  .card-info { flex: 1; min-width: 0; }
+  #card-name { font-weight: 800; font-size: 18px; color: #fff; margin-bottom: 3px; }
+  #card-set  { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
+  .info-table { width: 100%; font-size: 13px; border-collapse: collapse; }
+  .info-table td { padding: 5px 0; }
+  .info-table .label { color: var(--muted); }
+  .info-table .value { text-align: right; color: var(--text); }
+  #card-id { font-family: monospace; font-size: 11px; }
+
+  /* ══════════════════════════════════
+     SCAN MODAL
+  ══════════════════════════════════ */
+  #scan-modal {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: #000; flex-direction: column;
+  }
+  #scan-modal.open { display: flex; }
+
+  /* Header */
+  #scan-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; background: rgba(0,0,0,.75);
+    backdrop-filter: blur(8px); position: relative; z-index: 10;
+  }
+  #scan-title { font-size: 15px; font-weight: 700; }
+  #close-scan {
+    width: 36px; height: 36px; border-radius: 50%; border: none;
+    background: rgba(255,255,255,.12); color: #fff;
+    font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  }
+
+  /* Camera area */
+  #camera-wrap {
+    flex: 1; position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: center; background: #000;
+  }
+  #camera-video { width: 100%; height: 100%; object-fit: cover; }
+
+  /* Guide overlay */
+  #scan-overlay {
+    position: absolute; inset: 0; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+    padding-bottom: 130px;
+  }
+  /* Dark vignette around the target box */
+  #scan-box {
+    width: 75%; height: 64px;
+    border: 2.5px solid var(--gold); border-radius: 10px;
+    position: relative;
+    box-shadow: 0 0 0 9999px rgba(0,0,0,.52);
+  }
+  /* Corner accents */
+  #scan-box::before, #scan-box::after {
+    content: ''; position: absolute;
+    width: 18px; height: 18px; border-color: var(--gold); border-style: solid;
+  }
+  #scan-box::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; border-radius: 5px 0 0 0; }
+  #scan-box::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
+  /* Animated scan line */
+  #scan-line {
+    position: absolute; left: 4px; right: 4px; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    animation: scanline 1.8s ease-in-out infinite;
+    border-radius: 1px;
+  }
+  @keyframes scanline {
+    0%   { top: 4px;  opacity: 1; }
+    50%  { top: calc(100% - 6px); opacity: 1; }
+    100% { top: 4px;  opacity: 1; }
+  }
+  #scan-hint {
+    margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.8);
+    text-align: center; line-height: 1.5; text-shadow: 0 1px 4px rgba(0,0,0,.8);
+  }
+
+  /* OCR processing overlay */
+  #ocr-overlay {
+    display: none; position: absolute; inset: 0;
+    background: rgba(0,0,0,.82); backdrop-filter: blur(4px);
+    flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    z-index: 30;
+  }
+  #ocr-overlay.show { display: flex; }
+  .spinner {
+    width: 48px; height: 48px;
+    border: 3px solid rgba(247,201,72,.25);
+    border-top-color: var(--gold); border-radius: 50%;
+    animation: spin .75s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #ocr-msg { font-size: 15px; color: var(--gold); font-weight: 600; }
+
+  /* Detected number popup */
+  #detected-popup {
+    display: none; position: absolute;
+    bottom: 160px; left: 50%; transform: translateX(-50%);
+    background: var(--surface); border: 2px solid var(--gold);
+    border-radius: 18px; padding: 18px 22px; text-align: center; z-index: 40;
+    min-width: 220px; box-shadow: 0 16px 48px rgba(0,0,0,.7);
+    animation: popIn .22s ease;
+  }
+  @keyframes popIn { from { transform: translateX(-50%) scale(.88); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
+  #detected-popup.show { display: block; }
+  #det-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  #det-num {
+    font-size: 32px; font-weight: 800; letter-spacing: 3px;
+    color: var(--gold); margin-bottom: 14px;
+  }
+  #use-detected {
+    width: 100%; padding: 12px; border: none; border-radius: 10px;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    color: #000; font-size: 15px; font-weight: 700; cursor: pointer;
+    margin-bottom: 8px;
+  }
+  #retry-ocr {
+    width: 100%; padding: 11px; border: 1px solid var(--border); border-radius: 10px;
+    background: transparent; color: var(--muted); font-size: 14px; cursor: pointer;
+  }
+
+  /* Scan footer */
+  #scan-footer {
+    background: rgba(0,0,0,.85); backdrop-filter: blur(10px);
+    padding: 14px 16px 28px; display: flex; flex-direction: column; gap: 10px;
+  }
+  #capture-btn {
+    width: 100%; padding: 17px; border: none; border-radius: var(--radius);
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    color: #000; font-size: 16px; font-weight: 800; cursor: pointer; letter-spacing: .3px;
+    box-shadow: 0 4px 20px rgba(247,201,72,.4);
+    transition: transform .1s;
+  }
+  #capture-btn:active { transform: scale(.97); }
+  #file-label {
+    display: block; width: 100%; padding: 15px; border-radius: var(--radius);
+    background: var(--surface2); border: 1.5px solid var(--border);
+    color: var(--text); font-size: 15px; font-weight: 600;
+    text-align: center; cursor: pointer;
+  }
+  #file-input { display: none; }
+
+  /* No-camera notice */
+  #no-camera-notice {
+    display: none; flex: 1; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px; padding: 32px;
+    text-align: center;
+  }
+  #no-camera-notice.show { display: flex; }
+  #no-camera-notice .icon { font-size: 52px; }
+  #no-camera-notice p { font-size: 14px; color: var(--muted); line-height: 1.6; }
+
+  canvas { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🃏</div>
+  <h1>Pokémon Card Scanner</h1>
+  <p class="subtitle">Escaneie ou digite o número da carta</p>
+</header>
+
+<div class="search-row">
+  <input id="code" type="text" placeholder="ex: 117/94" autocomplete="off" inputmode="decimal"/>
+  <button id="scan-btn" title="Escanear carta">📷</button>
+</div>
+<div class="dd-wrap">
+  <div id="dropdown"></div>
+</div>
+<div id="status"></div>
+
+<div id="result">
+  <div class="result-row">
+    <img id="card-img"/>
+    <div class="card-info">
+      <p id="card-name"></p>
+      <p id="card-set"></p>
+      <table class="info-table">
+        <tr><td class="label">Raridade</td><td id="card-rarity" class="value"></td></tr>
+        <tr><td class="label">Número</td><td id="card-num" class="value"></td></tr>
+        <tr><td class="label">ID TCGdex</td><td id="card-id" class="value"></td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════ SCAN MODAL ════════════ -->
+<div id="scan-modal">
+  <div id="scan-header">
+    <span id="scan-title">📷 Aponte para o número da carta</span>
+    <button id="close-scan">✕</button>
+  </div>
+
+  <div id="camera-wrap">
+    <video id="camera-video" autoplay playsinline muted></video>
+
+    <!-- Guide -->
+    <div id="scan-overlay">
+      <div id="scan-box"><div id="scan-line"></div></div>
+      <p id="scan-hint">Enquadre o número no canto inferior da carta<br>e toque em <strong>Capturar</strong></p>
+    </div>
+
+    <!-- No camera fallback -->
+    <div id="no-camera-notice">
+      <div class="icon">📁</div>
+      <p>Câmera não disponível neste navegador.<br>Use o botão abaixo para escolher uma foto da carta.</p>
+    </div>
+
+    <!-- OCR spinner -->
+    <div id="ocr-overlay">
+      <div class="spinner"></div>
+      <span id="ocr-msg">Lendo número...</span>
+    </div>
+
+    <!-- Detected number confirmation -->
+    <div id="detected-popup">
+      <div id="det-label">Número detectado</div>
+      <div id="det-num"></div>
+      <button id="use-detected">Buscar esta carta ✓</button>
+      <button id="retry-ocr">↩ Tentar novamente</button>
+    </div>
+  </div>
+
+  <div id="scan-footer">
+    <button id="capture-btn">📸 Capturar</button>
+    <label id="file-label">
+      🖼️ Usar foto da galeria
+      <input type="file" id="file-input" accept="image/*" capture="environment">
+    </label>
+  </div>
+</div>
+
+<canvas id="ocr-canvas"></canvas>
+
+<script>
+/* ═══════════════════════════════════════
+   SEARCH LOGIC
+═══════════════════════════════════════ */
+const input    = document.getElementById('code');
+const dropdown = document.getElementById('dropdown');
+const status   = document.getElementById('status');
+const resultEl = document.getElementById('result');
+
+let debounceTimer = null;
+let currentSearch = 0;
+
+function closeDropdown() { dropdown.style.display = 'none'; dropdown.innerHTML = ''; }
+
+function norm(v) { return String(v).replace(/^0+(?=\d)/, ''); }
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function setIdFromCardId(id) {
+  const i = id.lastIndexOf('-'); return i === -1 ? id : id.substring(0, i);
+}
+
+async function showCard(cardId) {
+  closeDropdown();
+  status.textContent = 'Carregando carta...';
+  resultEl.style.display = 'none';
+  try {
+    const res = await fetch('https://api.tcgdex.net/v2/en/cards/' + cardId);
+    if (!res.ok) throw new Error('status ' + res.status);
+    const card = await res.json();
+
+    document.getElementById('card-img').src = card.image ? card.image + '/high.png' : '';
+    document.getElementById('card-name').textContent = card.name || '';
+    document.getElementById('card-set').textContent = (card.set && card.set.name) || '';
+    document.getElementById('card-rarity').textContent = card.rarity || '-';
+    const cc = card.set && card.set.cardCount;
+    document.getElementById('card-num').textContent =
+      card.localId ? card.localId + (cc ? '/' + (cc.official || cc.total) : '') : '-';
+    document.getElementById('card-id').textContent = card.id || '-';
+
+    status.textContent = '';
+    resultEl.style.display = 'block';
+  } catch(e) {
+    status.textContent = 'Erro ao carregar a carta: ' + e.message;
+  }
+}
+
+async function runSearch(raw) {
+  raw = (raw || '').trim();
+  if (!raw) { closeDropdown(); status.textContent = ''; return; }
+
+  const parts   = raw.split('/');
+  const localId = norm(parts[0].trim());
+  const total   = parts[1] ? norm(parts[1].trim()) : null;
+
+  if (!localId || !/^\d+[A-Za-z]*$/.test(localId)) {
+    closeDropdown(); status.textContent = 'Digite um número válido.'; return;
+  }
+
+  resultEl.style.display = 'none';
+  const sid = ++currentSearch;
+
+  status.textContent = 'Carregando lista de sets...';
+  closeDropdown();
+
+  try {
+    if (!window._tcgSetsCache) {
+      const r = await fetch('https://api.tcgdex.net/v2/en/sets');
+      if (!r.ok) throw new Error('Erro sets: ' + r.status);
+      window._tcgSetsCache = await r.json();
+    }
+    if (sid !== currentSearch) return;
+
+    let sets = window._tcgSetsCache;
+
+    if (total) {
+      sets = sets.filter(s => {
+        if (!s.cardCount) return false;
+        const off = norm(String(s.cardCount.official ?? s.cardCount.total ?? ''));
+        const tot = norm(String(s.cardCount.total ?? ''));
+        return off === total || tot === total;
+      });
+      if (!sets.length) {
+        status.textContent = 'Nenhum set com ' + total + ' cartas. Tente só o número (' + localId + ').';
+        return;
+      }
+    }
+
+    status.textContent = 'Buscando nos sets (' + sets.length + ')...';
+
+    const tryF = (setId, lid) =>
+      fetch('https://api.tcgdex.net/v2/en/sets/' + setId + '/' + lid)
+        .then(r => r.ok ? r.json() : null).catch(() => null);
+
+    const baseRes = await Promise.all(sets.map(s => tryF(s.id, localId)));
+    if (sid !== currentSearch) return;
+
+    const setsHit  = sets.filter((_, i) => baseRes[i]?.id);
+    const baseCards = baseRes.filter(c => c?.id);
+
+    const varRes = await Promise.all(
+      setsHit.flatMap(s => ['a','b','c'].map(sfx => tryF(s.id, localId + sfx)))
+    );
+    if (sid !== currentSearch) return;
+
+    const found = [...baseCards, ...varRes.filter(c => c?.id)];
+
+    if (!found.length) {
+      closeDropdown();
+      status.textContent = total
+        ? 'Nenhuma carta ' + localId + '/' + total + ' encontrada. Tente só o número.'
+        : 'Nenhuma carta com número ' + localId + '.';
+      return;
+    }
+
+    if (found.length === 1) { status.textContent = '1 carta encontrada!'; showCard(found[0].id); return; }
+
+    status.textContent = found.length + ' carta(s)/variante(s) — escolha a que bate com a sua:';
+    dropdown.innerHTML = '';
+    found.forEach(card => {
+      const setName = (card.set && card.set.name) || setIdFromCardId(card.id);
+      const row = document.createElement('div');
+      row.className = 'suggestion';
+      row.innerHTML =
+        '<img src="' + (card.image ? card.image + '/low.png' : '') + '" onerror="this.style.visibility=\'hidden\'"/>' +
+        '<div><div class="name">' + escHtml(card.name || '') + '</div>' +
+        '<div class="set">' + escHtml(setName) + ' — #' + escHtml(String(card.localId)) + '</div></div>';
+      row.addEventListener('click', () => showCard(card.id));
+      dropdown.appendChild(row);
+    });
+    dropdown.style.display = 'block';
+
+  } catch(e) {
+    if (sid !== currentSearch) return;
+    status.textContent = 'Erro: ' + e.message;
+  }
+}
+
+input.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => runSearch(input.value), 500);
+});
+
+document.addEventListener('click', e => {
+  if (!dropdown.contains(e.target) && e.target !== input) closeDropdown();
+});
+
+/* ═══════════════════════════════════════
+   CAMERA / OCR
+═══════════════════════════════════════ */
+const scanModal     = document.getElementById('scan-modal');
+const camVideo      = document.getElementById('camera-video');
+const ocrOverlay    = document.getElementById('ocr-overlay');
+const ocrMsg        = document.getElementById('ocr-msg');
+const detPopup      = document.getElementById('detected-popup');
+const detNum        = document.getElementById('det-num');
+const useDetBtn     = document.getElementById('use-detected');
+const retryBtn      = document.getElementById('retry-ocr');
+const captureBtn    = document.getElementById('capture-btn');
+const fileInput     = document.getElementById('file-input');
+const ocrCanvas     = document.getElementById('ocr-canvas');
+const noCamNotice   = document.getElementById('no-camera-notice');
+const scanOverlay   = document.getElementById('scan-overlay');
+
+let camStream  = null;
+let lastDetected = '';
+
+document.getElementById('scan-btn').addEventListener('click', openScanner);
+document.getElementById('close-scan').addEventListener('click', closeScanner);
+
+async function openScanner() {
+  scanModal.classList.add('open');
+  detPopup.classList.remove('show');
+  ocrOverlay.classList.remove('show');
+  noCamNotice.classList.remove('show');
+  scanOverlay.style.display = '';
+  captureBtn.style.display = '';
+
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+    camVideo.srcObject = camStream;
+  } catch(e) {
+    // No camera access (HTTP or denied) — show file-only mode
+    camVideo.style.display = 'none';
+    scanOverlay.style.display = 'none';
+    captureBtn.style.display = 'none';
+    noCamNotice.classList.add('show');
+    document.getElementById('scan-title').textContent = '📁 Escolha uma foto da carta';
+  }
+}
+
+function closeScanner() {
+  scanModal.classList.remove('open');
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  camVideo.srcObject = null;
+  camVideo.style.display = '';
+  detPopup.classList.remove('show');
+  ocrOverlay.classList.remove('show');
+}
+
+captureBtn.addEventListener('click', () => {
+  if (!camVideo.videoWidth) return;
+  const ctx = ocrCanvas.getContext('2d');
+  ocrCanvas.width  = camVideo.videoWidth;
+  ocrCanvas.height = camVideo.videoHeight;
+  ctx.drawImage(camVideo, 0, 0);
+  processOCR(ocrCanvas);
+});
+
+fileInput.addEventListener('change', e => {
+  const file = e.target.files[0]; if (!file) return;
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = () => {
+    const ctx = ocrCanvas.getContext('2d');
+    ocrCanvas.width = img.width; ocrCanvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    processOCR(ocrCanvas);
+  };
+  img.src = url;
+  fileInput.value = '';
+});
+
+async function loadTesseract() {
+  if (window.Tesseract) return;
+  ocrMsg.textContent = 'Carregando OCR (primeira vez)...';
+  await new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = res; s.onerror = () => rej(new Error('Falha ao carregar Tesseract.js'));
+    document.head.appendChild(s);
+  });
+}
+
+async function processOCR(canvas) {
+  ocrOverlay.classList.add('show');
+  detPopup.classList.remove('show');
+
+  try {
+    await loadTesseract();
+
+    // Crop bottom 35% where the card number lives
+    const cropY = Math.floor(canvas.height * 0.65);
+    const cropH = canvas.height - cropY;
+
+    const crop = document.createElement('canvas');
+    const ctx  = crop.getContext('2d');
+    // Scale 3× for better OCR accuracy
+    crop.width  = canvas.width * 3;
+    crop.height = cropH * 3;
+    ctx.drawImage(canvas, 0, cropY, canvas.width, cropH, 0, 0, crop.width, crop.height);
+
+    // Grayscale + hard threshold → black/white image
+    const id = ctx.getImageData(0, 0, crop.width, crop.height);
+    const d  = id.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
+      const v = g > 140 ? 255 : 0;
+      d[i] = d[i+1] = d[i+2] = v;
+    }
+    ctx.putImageData(id, 0, 0);
+
+    ocrMsg.textContent = 'Lendo número...';
+
+    const { data } = await Tesseract.recognize(crop, 'eng', {
+      tessedit_char_whitelist: '0123456789/',
+      tessedit_pageseg_mode: '6',
+    });
+
+    const text = (data.text || '').replace(/\s+/g, '');
+    // Try X/Y pattern first, then bare number
+    const match = text.match(/(\d{1,4})\/(\d{1,4})/) || text.match(/(\d{1,4})/);
+
+    ocrOverlay.classList.remove('show');
+
+    if (match) {
+      lastDetected = match[0];
+      detNum.textContent = lastDetected;
+      detPopup.classList.add('show');
+    } else {
+      status.textContent = 'Número não detectado. Tente enquadrar melhor ou digitar.';
+      closeScanner();
+    }
+
+  } catch(e) {
+    ocrOverlay.classList.remove('show');
+    status.textContent = 'Erro OCR: ' + e.message;
+    closeScanner();
+  }
+}
+
+useDetBtn.addEventListener('click', () => {
+  input.value = lastDetected;
+  closeScanner();
+  runSearch(lastDetected);
+});
+
+retryBtn.addEventListener('click', () => {
+  detPopup.classList.remove('show');
+});
+</script>
+
+</body>
+</html>
