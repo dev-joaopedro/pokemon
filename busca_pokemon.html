@@ -573,46 +573,34 @@ async function loadTesseract() {
   });
 }
 
-// Helper: crop + scale a region from a canvas
+// Crop a vertical slice of a canvas and scale it up
 function cropRegion(src, yStart, yEnd, scale) {
   const sw = src.width, sh = src.height;
   const sy = Math.floor(sh * yStart);
   const sH = Math.floor(sh * (yEnd - yStart));
   const c = document.createElement('canvas');
-  c.width = sw * scale; c.height = sH * scale;
+  c.width = Math.round(sw * scale);
+  c.height = Math.round(sH * scale);
   c.getContext('2d').drawImage(src, 0, sy, sw, sH, 0, 0, c.width, c.height);
   return c;
 }
 
-// Helper: grayscale + adaptive-ish threshold (per-tile mean)
-function preprocessCrop(c) {
+// Sharpen contrast without binarizing — works much better with Tesseract
+function enhanceContrast(src) {
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
   const ctx = c.getContext('2d');
-  const id = ctx.getImageData(0, 0, c.width, c.height);
-  const d = id.data, W = c.width, H = c.height;
-  // Convert to grayscale first
-  const gray = new Uint8Array(W * H);
-  for (let i = 0; i < d.length; i += 4) {
-    gray[i >> 2] = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-  }
-  // Adaptive threshold: per-pixel compare to local 15×15 mean
-  const R = 15;
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      let sum = 0, cnt = 0;
-      for (let dy = -R; dy <= R; dy++) {
-        for (let dx = -R; dx <= R; dx++) {
-          const ny = y + dy, nx = x + dx;
-          if (ny >= 0 && ny < H && nx >= 0 && nx < W) { sum += gray[ny * W + nx]; cnt++; }
-        }
-      }
-      const thresh = (sum / cnt) - 10;
-      const v = gray[y * W + x] > thresh ? 255 : 0;
-      const i = (y * W + x) * 4;
-      d[i] = d[i+1] = d[i+2] = v; d[i+3] = 255;
-    }
-  }
-  ctx.putImageData(id, 0, 0);
+  ctx.filter = 'contrast(2) saturate(0) brightness(1.1)';
+  ctx.drawImage(src, 0, 0);
   return c;
+}
+
+// Run Tesseract with a whitelist, return trimmed text
+async function ocrWith(canvas, whitelist, psm) {
+  const opts = { tessedit_pageseg_mode: String(psm) };
+  if (whitelist) opts.tessedit_char_whitelist = whitelist;
+  const { data } = await Tesseract.recognize(canvas, 'eng', opts);
+  return (data.text || '').trim();
 }
 
 async function processOCR(canvas) {
@@ -622,31 +610,33 @@ async function processOCR(canvas) {
   try {
     await loadTesseract();
 
-    // ── Pass 1: topo da carta (0–14%) → nome do Pokémon ──────────────────
+    /* ── NOME: topo da carta (0–18%), 4× scale ── */
     ocrMsg.textContent = 'Lendo nome...';
-    const nameCanvas = preprocessCrop(cropRegion(canvas, 0, 0.14, 4));
-    const { data: nameData } = await Tesseract.recognize(nameCanvas, 'eng', {
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz2- ',
-      tessedit_pageseg_mode: '7',   // single text line
-    });
+    const nameLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz2- ';
 
-    const nameRaw = (nameData.text || '').trim();
-    // Pega a primeira palavra com ≥ 3 letras (filtra lixo OCR curto)
+    // Try: enhanced contrast first, then raw color
+    const nameRaw4 = cropRegion(canvas, 0, 0.18, 4);
+    let nameRaw = await ocrWith(enhanceContrast(nameRaw4), nameLetters, 7);
+    if (!nameRaw || nameRaw.replace(/\s/g,'').length < 3)
+      nameRaw = await ocrWith(nameRaw4, nameLetters, 6);
+
     let detectedName = '';
     for (const token of nameRaw.split(/\s+/)) {
-      const clean = token.replace(/[^A-Za-z2-]/g, '');
+      const clean = token.replace(/[^A-Za-z2]/g, '');
       if (clean.length >= 3) { detectedName = clean; break; }
     }
 
-    // ── Pass 2: rodapé da carta (90–100%) → número X/Y ──────────────────
+    /* ── NÚMERO: rodapé da carta (85–100%), 4× scale ── */
     ocrMsg.textContent = 'Lendo número...';
-    const numCanvas = preprocessCrop(cropRegion(canvas, 0.90, 1.0, 4));
-    const { data: numData } = await Tesseract.recognize(numCanvas, 'eng', {
-      tessedit_char_whitelist: '0123456789/',
-      tessedit_pageseg_mode: '7',
-    });
+    const numLetters = '0123456789/';
 
-    const numRaw = (numData.text || '').replace(/\s+/g, '');
+    const numRaw4 = cropRegion(canvas, 0.85, 1.0, 4);
+    let numRaw = (await ocrWith(enhanceContrast(numRaw4), numLetters, 7)).replace(/\s+/g,'');
+    if (!numRaw.match(/\d/))
+      numRaw = (await ocrWith(numRaw4, numLetters, 6)).replace(/\s+/g,'');
+
+    // Common OCR confusion: O→0, I/l→1, S→5, B→8
+    numRaw = numRaw.replace(/[OoQ]/g,'0').replace(/[IilL]/g,'1').replace(/S/g,'5').replace(/B/g,'8');
     const numMatch = numRaw.match(/(\d{1,4})\/(\d{1,4})/) || numRaw.match(/(\d{1,4})/);
     const detectedNum = numMatch ? numMatch[0] : '';
 
@@ -668,6 +658,7 @@ async function processOCR(canvas) {
     status.textContent = 'Erro OCR: ' + e.message;
     closeScanner();
   }
+
 }
 
 useDetBtn.addEventListener('click', () => {
