@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8"/>
@@ -138,20 +138,20 @@
   /* Guide overlay */
   #scan-overlay {
     position: absolute; inset: 0; pointer-events: none;
-    display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-    padding-bottom: 130px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding-bottom: 0;
   }
-  /* Dark vignette around the target box */
+  /* Dark vignette around the target box — carta inteira */
   #scan-box {
-    width: 75%; height: 64px;
-    border: 2.5px solid var(--gold); border-radius: 10px;
+    width: 62%; aspect-ratio: 2.5 / 3.5;
+    border: 2.5px solid var(--gold); border-radius: 12px;
     position: relative;
     box-shadow: 0 0 0 9999px rgba(0,0,0,.52);
   }
   /* Corner accents */
   #scan-box::before, #scan-box::after {
     content: ''; position: absolute;
-    width: 18px; height: 18px; border-color: var(--gold); border-style: solid;
+    width: 22px; height: 22px; border-color: var(--gold); border-style: solid;
   }
   #scan-box::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; border-radius: 5px 0 0 0; }
   #scan-box::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
@@ -285,7 +285,7 @@
 <!-- ════════════ SCAN MODAL ════════════ -->
 <div id="scan-modal">
   <div id="scan-header">
-    <span id="scan-title">📷 Aponte para o número da carta</span>
+    <span id="scan-title">📷 Enquadre a carta inteira</span>
     <button id="close-scan">✕</button>
   </div>
 
@@ -295,7 +295,7 @@
     <!-- Guide -->
     <div id="scan-overlay">
       <div id="scan-box"><div id="scan-line"></div></div>
-      <p id="scan-hint">Enquadre o número no canto inferior da carta<br>e toque em <strong>Capturar</strong></p>
+      <p id="scan-hint">Enquadre a carta inteira dentro do guia<br>e toque em <strong>Capturar</strong></p>
     </div>
 
     <!-- No camera fallback -->
@@ -307,13 +307,14 @@
     <!-- OCR spinner -->
     <div id="ocr-overlay">
       <div class="spinner"></div>
-      <span id="ocr-msg">Lendo número...</span>
+      <span id="ocr-msg">Identificando carta...</span>
     </div>
 
-    <!-- Detected number confirmation -->
+    <!-- Detected card confirmation -->
     <div id="detected-popup">
-      <div id="det-label">Número detectado</div>
+      <div id="det-label">Carta detectada</div>
       <div id="det-num"></div>
+      <div id="det-name" style="font-size:14px;color:var(--muted);margin-bottom:14px;"></div>
       <button id="use-detected">Buscar esta carta ✓</button>
       <button id="retry-ocr">↩ Tentar novamente</button>
     </div>
@@ -500,6 +501,7 @@ const scanOverlay   = document.getElementById('scan-overlay');
 
 let camStream  = null;
 let lastDetected = '';
+let lastDetectedName = '';
 
 document.getElementById('scan-btn').addEventListener('click', openScanner);
 document.getElementById('close-scan').addEventListener('click', closeScanner);
@@ -578,46 +580,60 @@ async function processOCR(canvas) {
   try {
     await loadTesseract();
 
-    // Crop bottom 35% where the card number lives
-    const cropY = Math.floor(canvas.height * 0.65);
-    const cropH = canvas.height - cropY;
+    // Scale 2× the full card for better OCR accuracy
+    const scaled = document.createElement('canvas');
+    const sctx   = scaled.getContext('2d');
+    scaled.width  = canvas.width * 2;
+    scaled.height = canvas.height * 2;
+    sctx.drawImage(canvas, 0, 0, scaled.width, scaled.height);
 
-    const crop = document.createElement('canvas');
-    const ctx  = crop.getContext('2d');
-    // Scale 3× for better OCR accuracy
-    crop.width  = canvas.width * 3;
-    crop.height = cropH * 3;
-    ctx.drawImage(canvas, 0, cropY, canvas.width, cropH, 0, 0, crop.width, crop.height);
-
-    // Grayscale + hard threshold → black/white image
-    const id = ctx.getImageData(0, 0, crop.width, crop.height);
+    // Grayscale + contrast boost
+    const id = sctx.getImageData(0, 0, scaled.width, scaled.height);
     const d  = id.data;
     for (let i = 0; i < d.length; i += 4) {
       const g = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
-      const v = g > 140 ? 255 : 0;
+      const v = g > 128 ? 255 : 0;
       d[i] = d[i+1] = d[i+2] = v;
     }
-    ctx.putImageData(id, 0, 0);
+    sctx.putImageData(id, 0, 0);
 
-    ocrMsg.textContent = 'Lendo número...';
+    ocrMsg.textContent = 'Lendo carta inteira...';
 
-    const { data } = await Tesseract.recognize(crop, 'eng', {
-      tessedit_char_whitelist: '0123456789/',
-      tessedit_pageseg_mode: '6',
+    // Pass 1: full card with letters + digits to get name and number
+    const { data } = await Tesseract.recognize(scaled, 'eng', {
+      tessedit_pageseg_mode: '3',
     });
 
-    const text = (data.text || '').replace(/\s+/g, '');
-    // Try X/Y pattern first, then bare number
-    const match = text.match(/(\d{1,4})\/(\d{1,4})/) || text.match(/(\d{1,4})/);
+    const rawText = data.text || '';
+
+    // Extract card number (X/Y or X) — usually at the bottom
+    const numMatch = rawText.match(/(\d{1,4})\/(\d{1,4})/) || rawText.match(/\b(\d{1,4})\b/);
+    const detectedNum = numMatch ? numMatch[0] : '';
+
+    // Extract Pokémon name — first token of ≥ 3 alpha chars on its own line (top of card)
+    // Pokémon name is typically on the first 1-2 lines, mixed/title case, 3+ letters
+    const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+    let detectedName = '';
+    for (const line of lines.slice(0, 6)) {
+      // Skip lines that are mostly digits or look like HP/number lines
+      const alpha = line.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g, '');
+      if (alpha.length >= 3 && !/^\d/.test(line) && !/HP/i.test(line)) {
+        // Grab the first word that looks like a name (title-case or all-caps)
+        const word = line.split(/\s+/).find(w => /^[A-ZÀ-Ö][a-zA-ZÀ-ÿ]{2,}$/.test(w) || /^[A-Z]{3,}$/.test(w));
+        if (word) { detectedName = word; break; }
+      }
+    }
 
     ocrOverlay.classList.remove('show');
 
-    if (match) {
-      lastDetected = match[0];
-      detNum.textContent = lastDetected;
+    if (detectedNum || detectedName) {
+      lastDetected = detectedNum || '';
+      lastDetectedName = detectedName || '';
+      detNum.textContent = detectedNum || '—';
+      document.getElementById('det-name').textContent = detectedName ? '🎴 ' + detectedName : '';
       detPopup.classList.add('show');
     } else {
-      status.textContent = 'Número não detectado. Tente enquadrar melhor ou digitar.';
+      status.textContent = 'Não foi possível identificar a carta. Tente enquadrar melhor ou digitar.';
       closeScanner();
     }
 
@@ -629,10 +645,69 @@ async function processOCR(canvas) {
 }
 
 useDetBtn.addEventListener('click', () => {
-  input.value = lastDetected;
   closeScanner();
-  runSearch(lastDetected);
+  if (lastDetectedName) {
+    runSearchByName(lastDetectedName, lastDetected);
+  } else {
+    input.value = lastDetected;
+    runSearch(lastDetected);
+  }
 });
+
+async function runSearchByName(name, numHint) {
+  status.textContent = 'Buscando "' + name + '"...';
+  resultEl.style.display = 'none';
+  closeDropdown();
+  try {
+    const r = await fetch('https://api.tcgdex.net/v2/en/cards?name=' + encodeURIComponent(name));
+    if (!r.ok) throw new Error('status ' + r.status);
+    let cards = await r.json();
+    if (!Array.isArray(cards) || !cards.length) {
+      // Fallback to number search if name yields nothing
+      if (numHint) { input.value = numHint; runSearch(numHint); return; }
+      status.textContent = 'Nenhuma carta encontrada para "' + name + '". Tente digitar.';
+      return;
+    }
+    // Filter by number hint if available
+    if (numHint) {
+      const parts = numHint.split('/');
+      const localId = norm(parts[0]);
+      const total   = parts[1] ? norm(parts[1]) : null;
+      const filtered = cards.filter(c => {
+        if (norm(String(c.localId || '')) !== localId) return false;
+        if (total && c.set && c.set.cardCount) {
+          const off = norm(String(c.set.cardCount.official ?? c.set.cardCount.total ?? ''));
+          const tot = norm(String(c.set.cardCount.total ?? ''));
+          return off === total || tot === total;
+        }
+        return true;
+      });
+      if (filtered.length) cards = filtered;
+    }
+    if (cards.length === 1) {
+      status.textContent = '1 carta encontrada!';
+      showCard(cards[0].id);
+      return;
+    }
+    input.value = numHint || name;
+    status.textContent = cards.length + ' carta(s) — escolha a que bate com a sua:';
+    dropdown.innerHTML = '';
+    cards.forEach(card => {
+      const setName = (card.set && card.set.name) || setIdFromCardId(card.id);
+      const row = document.createElement('div');
+      row.className = 'suggestion';
+      row.innerHTML =
+        '<img src="' + (card.image ? card.image + '/low.png' : '') + '" onerror="this.style.visibility=\'hidden\'"/>' +
+        '<div><div class="name">' + escHtml(card.name || '') + '</div>' +
+        '<div class="set">' + escHtml(setName) + ' — #' + escHtml(String(card.localId)) + '</div></div>';
+      row.addEventListener('click', () => showCard(card.id));
+      dropdown.appendChild(row);
+    });
+    dropdown.style.display = 'block';
+  } catch(e) {
+    status.textContent = 'Erro: ' + e.message;
+  }
+}
 
 retryBtn.addEventListener('click', () => {
   detPopup.classList.remove('show');
