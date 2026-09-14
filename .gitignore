@@ -1,1 +1,6 @@
 ﻿iniciar_servidor.ps1
+node_modules/
+.netlify/
+deno.lock
+.env
+.env.local

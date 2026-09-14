@@ -13,313 +13,455 @@
     --bg: #0e0e1a;
     --surface: #18182a;
     --surface2: #22223a;
+    --surface3: #2a2a46;
     --border: #2e2e4e;
     --text: #e8e8f8;
-    --muted: #7878a0;
+    --muted: #8888ac;
+    --danger: #ff5d6c;
+    --success: #4ade80;
     --radius: 14px;
   }
+
+  html { color-scheme: dark; }
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     background: var(--bg);
     color: var(--text);
     min-height: 100dvh;
-    padding: 24px 16px 48px;
-    max-width: 520px;
-    margin: 0 auto;
     -webkit-font-smoothing: antialiased;
+    padding-bottom: 78px;
   }
 
-  /* ── Header ── */
-  header { text-align: center; margin-bottom: 28px; }
-  .logo { font-size: 36px; margin-bottom: 6px; }
-  h1 {
-    font-size: 22px; font-weight: 800;
+  a { color: inherit; }
+  button, select, input { font-family: inherit; }
+  .muted { color: var(--muted); }
+
+  /* ── Topbar ── */
+  #topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; gap: 10px;
+    position: sticky; top: 0; z-index: 40;
+    background: rgba(14,14,26,.92); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  #topbar .brand { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 16px; }
+  #topbar .brand .logo { font-size: 22px; }
+  #topbar .brand span.title {
     background: linear-gradient(135deg, var(--gold), var(--orange));
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-    background-clip: text;
-    letter-spacing: -0.5px;
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
   }
-  .subtitle { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .topbar-controls { display: flex; gap: 8px; }
+  .mini-select {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 7px 8px; font-size: 12px; font-weight: 600;
+  }
 
-  /* ── Search row ── */
-  .search-row { display: flex; gap: 10px; margin-bottom: 6px; }
-  #code {
-    flex: 1; padding: 15px 16px; font-size: 17px;
+  main { max-width: 560px; margin: 0 auto; padding: 16px; }
+
+  .view { display: none; }
+  .view.active { display: block; animation: fadein .18s ease; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: translateY(0);} }
+
+  /* ── Bottom nav ── */
+  #bottomnav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+    display: flex; align-items: center; justify-content: space-around;
+    background: rgba(14,14,26,.95); backdrop-filter: blur(10px);
+    border-top: 1px solid var(--border);
+    padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+  }
+  .nav-item {
+    background: none; border: none; color: var(--muted);
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 10px;
+    cursor: pointer; transition: color .15s;
+  }
+  .nav-item .nav-icon { font-size: 20px; }
+  .nav-item.active { color: var(--gold); }
+  .nav-fab {
+    width: 58px; height: 58px; border-radius: 50%; border: none;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    font-size: 26px; cursor: pointer; margin-top: -30px;
+    box-shadow: 0 6px 20px rgba(247,201,72,.45);
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .12s;
+  }
+  .nav-fab:active { transform: scale(.93); }
+
+  /* ── Cards / sections ── */
+  .section-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .section-card h3 { font-size: 14px; margin-bottom: 10px; color: var(--text); }
+  .section-card h4 { font-size: 12px; color: var(--muted); margin: 10px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+
+  .empty-hint { color: var(--muted); text-align: center; padding: 28px 10px; font-size: 14px; line-height: 1.6; }
+
+  /* ── Dashboard ── */
+  .dash-hero {
+    background: linear-gradient(160deg, var(--surface2), var(--surface));
+    border: 1px solid var(--border); border-radius: 20px; padding: 22px 18px;
+    margin-bottom: 16px; text-align: center;
+  }
+  .dash-hero .label { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  .dash-hero .value {
+    font-size: 34px; font-weight: 800;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+  .stat-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 14px; }
+  .stat-tile .num { font-size: 22px; font-weight: 800; }
+  .stat-tile .lbl { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .stat-tile.wide { grid-column: 1 / -1; }
+  .stat-tile.wide .num { font-size: 16px; }
+
+  .btn-scan-big {
+    width: 100%; padding: 18px; border: none; border-radius: 18px;
+    background: linear-gradient(135deg, var(--gold), var(--orange));
+    color: #1a1200; font-size: 17px; font-weight: 800; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    box-shadow: 0 8px 28px rgba(247,201,72,.35); margin-bottom: 10px;
+    transition: transform .1s;
+  }
+  .btn-scan-big:active { transform: scale(.98); }
+  .btn-search-shortcut {
+    width: 100%; padding: 14px; border-radius: 14px; border: 1.5px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: 14px; font-weight: 600;
+    cursor: pointer; margin-bottom: 20px;
+  }
+
+  section.block-title { display: flex; align-items: center; justify-content: space-between; margin: 4px 0 10px; }
+  section.block-title h3 { font-size: 15px; }
+
+  /* ── Item card (dashboard recent + collection) ── */
+  .item-card {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 10px; margin-bottom: 10px; cursor: pointer; transition: border-color .15s, transform .1s;
+  }
+  .item-card:active { transform: scale(.99); }
+  .item-card:hover { border-color: var(--gold); }
+  .item-card img { width: 46px; height: 64px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: var(--surface3); }
+  .item-card-info { flex: 1; min-width: 0; }
+  .item-card-name { font-weight: 700; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-card-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .item-card-value { font-weight: 800; font-size: 14px; color: var(--gold); white-space: nowrap; }
+
+  /* ── Candidatos (busca / confirmação) ── */
+  .candidate {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 10px; margin-bottom: 8px; cursor: pointer; transition: border-color .15s, background .1s;
+  }
+  .candidate:hover, .candidate:active { border-color: var(--gold); background: var(--surface2); }
+  .candidate img { width: 42px; height: 58px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: var(--surface3); }
+  .candidate-name { font-weight: 700; font-size: 14px; }
+  .candidate-set { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .read-summary {
+    background: var(--surface2); border: 1px dashed var(--border); border-radius: 12px;
+    padding: 12px 14px; font-size: 13px; margin-bottom: 14px;
+  }
+  .read-summary .conf { color: var(--muted); font-size: 12px; }
+
+  /* ── Busca manual ── */
+  .search-box {
+    display: flex; gap: 8px; margin-bottom: 6px;
+  }
+  .search-box input {
+    flex: 1; padding: 14px 16px; font-size: 15px;
     background: var(--surface); border: 1.5px solid var(--border);
     border-radius: var(--radius); color: var(--text); outline: none;
-    transition: border-color .2s;
   }
-  #code:focus { border-color: var(--gold); }
-  #code::placeholder { color: var(--muted); }
+  .search-box input:focus { border-color: var(--gold); }
+  #search-status { font-size: 13px; color: var(--muted); margin: 8px 0 12px; }
 
-  #scan-btn {
-    width: 56px; height: 56px; border: none;
+  /* ── Skeletons ── */
+  @keyframes shimmer { 0% { background-position: -200px 0; } 100% { background-position: 200px 0; } }
+  .skeleton-row { display: flex; gap: 12px; padding: 10px; margin-bottom: 8px; }
+  .skeleton-thumb, .skeleton-img {
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 37%, var(--surface2) 63%);
+    background-size: 400px 100%; animation: shimmer 1.4s infinite linear; border-radius: 8px;
+  }
+  .skeleton-thumb { width: 42px; height: 58px; flex-shrink: 0; }
+  .skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; justify-content: center; }
+  .skeleton-line {
+    height: 11px; border-radius: 5px;
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--surface3) 37%, var(--surface2) 63%);
+    background-size: 400px 100%; animation: shimmer 1.4s infinite linear;
+  }
+  .skeleton-line.w70 { width: 70%; } .skeleton-line.w40 { width: 40%; } .skeleton-line.w60 { width: 60%; }
+  .skeleton-detail { display: flex; gap: 16px; margin-bottom: 16px; }
+  .skeleton-img { width: 130px; height: 182px; flex-shrink: 0; }
+
+  /* ── Detalhe da carta ── */
+  .detail-hero { text-align: center; margin-bottom: 16px; }
+  .detail-hero img {
+    width: 220px; max-width: 70%; border-radius: 14px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  }
+  .detail-info { text-align: center; margin-bottom: 16px; }
+  .detail-info h2 { font-size: 21px; font-weight: 800; }
+  .detail-set { color: var(--muted); font-size: 14px; margin-top: 2px; margin-bottom: 12px; }
+  .info-table { width: 100%; font-size: 13px; border-collapse: collapse; text-align: left; }
+  .info-table td { padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .info-table tr:last-child td { border-bottom: none; }
+  .info-table .label { color: var(--muted); width: 40%; }
+  .info-table .value { text-align: right; font-weight: 600; }
+  .info-table .value.mono { font-family: monospace; font-size: 11px; font-weight: 400; }
+
+  .price-main { font-size: 30px; font-weight: 800; color: var(--gold); }
+  .price-secondary { font-size: 14px; color: var(--text); margin-top: 2px; }
+  .price-meta { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+  .price-history { margin-top: 14px; }
+  .hist-chart { display: flex; align-items: flex-end; gap: 10px; height: 64px; padding: 0 4px; }
+  .hist-bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; flex: 1; }
+  .hist-bar { width: 100%; max-width: 28px; background: linear-gradient(180deg, var(--gold), var(--orange)); border-radius: 4px 4px 0 0; }
+  .hist-bar-wrap span { font-size: 10px; color: var(--muted); }
+  .hist-delta { margin-top: 8px; font-size: 12px; font-weight: 700; }
+  .hist-delta.up { color: var(--success); }
+  .hist-delta.down { color: var(--danger); }
+
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .chip.active { border-color: var(--gold); background: rgba(247,201,72,.15); color: var(--gold); }
+
+  .form-row { display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .form-row label { flex: 1; min-width: 130px; font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 5px; }
+  .form-row select, .form-row input[type=number] {
+    background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 10px; font-size: 14px;
+  }
+  .qty-stepper { display: flex; align-items: stretch; }
+  .qty-stepper button {
+    width: 38px; border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+    font-size: 18px; cursor: pointer;
+  }
+  .qty-stepper button:first-child { border-radius: 10px 0 0 10px; }
+  .qty-stepper button:last-child { border-radius: 0 10px 10px 0; }
+  .qty-stepper input {
+    width: 100%; text-align: center; border-radius: 0; border-left: none; border-right: none;
+  }
+
+  .btn-primary {
+    width: 100%; padding: 14px; border: none; border-radius: 12px;
     background: linear-gradient(135deg, var(--gold), var(--orange));
-    border-radius: var(--radius); font-size: 24px; cursor: pointer;
-    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-    transition: transform .12s, opacity .12s;
-    box-shadow: 0 4px 16px rgba(247,201,72,.35);
+    color: #1a1200; font-size: 15px; font-weight: 800; cursor: pointer;
   }
-  #scan-btn:active { transform: scale(.93); opacity: .85; }
+  .btn-secondary {
+    padding: 10px 16px; border-radius: 10px; border: 1.5px solid var(--border);
+    background: var(--surface2); color: var(--text); font-size: 13px; font-weight: 700; cursor: pointer;
+    align-self: flex-end;
+  }
+  .btn-danger-ghost {
+    width: 100%; margin-top: 8px; padding: 12px; border-radius: 12px;
+    border: 1.5px solid rgba(255,93,108,.4); background: transparent; color: var(--danger);
+    font-size: 13px; font-weight: 700; cursor: pointer;
+  }
 
-  /* ── Dropdown ── */
-  .dd-wrap { position: relative; }
-  #dropdown {
-    display: none; position: absolute; left: 0; right: 0; top: 4px;
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: var(--radius); max-height: 340px; overflow-y: auto;
-    z-index: 50; box-shadow: 0 12px 40px rgba(0,0,0,.6);
-  }
-  .suggestion {
-    display: flex; align-items: center; gap: 12px;
-    padding: 11px 14px; cursor: pointer;
-    border-bottom: 1px solid var(--border);
-    transition: background .1s;
-  }
-  .suggestion:last-child { border-bottom: none; }
-  .suggestion:active, .suggestion:hover { background: var(--surface2); }
-  .suggestion img { width: 38px; height: 52px; object-fit: cover; border-radius: 5px; flex-shrink: 0; }
-  .suggestion .name { font-size: 14px; font-weight: 700; }
-  .suggestion .set  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .card-desc { font-size: 13px; line-height: 1.6; color: var(--text); margin: 8px 0; }
+  .section-card p { font-size: 13px; line-height: 1.7; }
 
-  /* ── Status ── */
-  #status { font-size: 13px; color: var(--muted); min-height: 20px; margin: 10px 0 4px; text-align: center; }
+  .badge-auto, .badge-official {
+    display: inline-block; font-size: 11px; font-weight: 700; padding: 5px 10px;
+    border-radius: 999px; margin-bottom: 12px;
+  }
+  .badge-auto { background: rgba(255,140,0,.15); color: var(--orange); }
+  .badge-official { background: rgba(74,222,128,.15); color: var(--success); }
+  .translate-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  @media (min-width: 480px) { .translate-grid { grid-template-columns: 1fr 1fr; } }
+  .translate-label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; font-weight: 700; }
+  .tt-name { font-weight: 800; margin-bottom: 4px; }
 
-  /* ── Result ── */
-  #result {
-    display: none; background: var(--surface); border-radius: 18px;
-    border: 1px solid var(--border); padding: 18px; margin-top: 14px;
-    box-shadow: 0 8px 32px rgba(0,0,0,.4);
+  .back-row { margin-bottom: 12px; }
+  #detail-back {
+    background: none; border: none; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer;
+    display: flex; align-items: center; gap: 4px; padding: 4px 0;
   }
-  .result-row { display: flex; gap: 16px; }
-  #card-img {
-    width: 130px; border-radius: 10px; flex-shrink: 0;
-    box-shadow: 0 6px 24px rgba(0,0,0,.7);
-  }
-  .card-info { flex: 1; min-width: 0; }
-  #card-name { font-weight: 800; font-size: 18px; color: #fff; margin-bottom: 3px; }
-  #card-set  { font-size: 13px; color: var(--muted); margin-bottom: 14px; }
-  .info-table { width: 100%; font-size: 13px; border-collapse: collapse; }
-  .info-table td { padding: 5px 0; }
-  .info-table .label { color: var(--muted); }
-  .info-table .value { text-align: right; color: var(--text); }
-  #card-id { font-family: monospace; font-size: 11px; }
 
-  /* ══════════════════════════════════
-     SCAN MODAL
-  ══════════════════════════════════ */
-  #scan-modal {
-    display: none; position: fixed; inset: 0; z-index: 200;
-    background: #000; flex-direction: column;
+  /* ── Coleção ── */
+  .coll-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .coll-stats .stat-tile .num { font-size: 16px; }
+  .filter-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  .filter-row input {
+    flex: 1; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 13px;
   }
+  .filter-row select {
+    padding: 11px 10px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--text); font-size: 13px;
+  }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(20px);
+    background: var(--surface3); border: 1px solid var(--border); color: var(--text);
+    padding: 12px 20px; border-radius: 12px; font-size: 13px; font-weight: 600;
+    opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
+    z-index: 200; max-width: 90vw; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #toast.error { border-color: rgba(255,93,108,.5); }
+
+  /* ══════ SCAN MODAL (câmera) ══════ */
+  #scan-modal { display: none; position: fixed; inset: 0; z-index: 300; background: #000; flex-direction: column; }
   #scan-modal.open { display: flex; }
-
-  /* Header */
   #scan-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 16px; background: rgba(0,0,0,.75);
-    backdrop-filter: blur(8px); position: relative; z-index: 10;
+    padding: 14px 16px; background: rgba(0,0,0,.75); backdrop-filter: blur(8px); position: relative; z-index: 10;
   }
   #scan-title { font-size: 15px; font-weight: 700; }
   #close-scan {
     width: 36px; height: 36px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,.12); color: #fff;
-    font-size: 18px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.12); color: #fff; font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
   }
-
-  /* Camera area */
-  #camera-wrap {
-    flex: 1; position: relative; overflow: hidden;
-    display: flex; align-items: center; justify-content: center; background: #000;
-  }
+  #camera-wrap { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000; }
   #camera-video { width: 100%; height: 100%; object-fit: cover; }
-
-  /* Guide overlay */
-  #scan-overlay {
-    position: absolute; inset: 0; pointer-events: none;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    padding-bottom: 0;
-  }
-  /* Dark vignette around the target box — carta inteira */
-  #scan-box {
-    width: 62%; aspect-ratio: 2.5 / 3.5;
-    border: 2.5px solid var(--gold); border-radius: 12px;
-    position: relative;
-    box-shadow: 0 0 0 9999px rgba(0,0,0,.52);
-  }
-  /* Corner accents */
-  #scan-box::before, #scan-box::after {
-    content: ''; position: absolute;
-    width: 22px; height: 22px; border-color: var(--gold); border-style: solid;
-  }
+  #scan-overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  #scan-box { width: 62%; aspect-ratio: 2.5 / 3.5; border: 2.5px solid var(--gold); border-radius: 12px; position: relative; box-shadow: 0 0 0 9999px rgba(0,0,0,.52); }
+  #scan-box::before, #scan-box::after { content: ''; position: absolute; width: 22px; height: 22px; border-color: var(--gold); border-style: solid; }
   #scan-box::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; border-radius: 5px 0 0 0; }
-  #scan-box::after  { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
-  /* Animated scan line */
-  #scan-line {
-    position: absolute; left: 4px; right: 4px; height: 2px;
-    background: linear-gradient(90deg, transparent, var(--gold), transparent);
-    animation: scanline 1.8s ease-in-out infinite;
-    border-radius: 1px;
-  }
-  @keyframes scanline {
-    0%   { top: 4px;  opacity: 1; }
-    50%  { top: calc(100% - 6px); opacity: 1; }
-    100% { top: 4px;  opacity: 1; }
-  }
-  #scan-hint {
-    margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.8);
-    text-align: center; line-height: 1.5; text-shadow: 0 1px 4px rgba(0,0,0,.8);
-  }
-
-  /* OCR processing overlay */
-  #ocr-overlay {
-    display: none; position: absolute; inset: 0;
-    background: rgba(0,0,0,.82); backdrop-filter: blur(4px);
-    flex-direction: column; align-items: center; justify-content: center; gap: 18px;
-    z-index: 30;
-  }
+  #scan-box::after { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
+  #scan-line { position: absolute; left: 4px; right: 4px; height: 2px; background: linear-gradient(90deg, transparent, var(--gold), transparent); animation: scanline 1.8s ease-in-out infinite; border-radius: 1px; }
+  @keyframes scanline { 0% { top: 4px; } 50% { top: calc(100% - 6px); } 100% { top: 4px; } }
+  #scan-hint { margin-top: 14px; font-size: 13px; color: rgba(255,255,255,.8); text-align: center; line-height: 1.5; text-shadow: 0 1px 4px rgba(0,0,0,.8); }
+  #ocr-overlay { display: none; position: absolute; inset: 0; background: rgba(0,0,0,.82); backdrop-filter: blur(4px); flex-direction: column; align-items: center; justify-content: center; gap: 18px; z-index: 30; }
   #ocr-overlay.show { display: flex; }
-  .spinner {
-    width: 48px; height: 48px;
-    border: 3px solid rgba(247,201,72,.25);
-    border-top-color: var(--gold); border-radius: 50%;
-    animation: spin .75s linear infinite;
-  }
+  .spinner { width: 48px; height: 48px; border: 3px solid rgba(247,201,72,.25); border-top-color: var(--gold); border-radius: 50%; animation: spin .75s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  #ocr-msg { font-size: 15px; color: var(--gold); font-weight: 600; }
-
-  /* Detected number popup */
-  #detected-popup {
-    display: none; position: absolute;
-    bottom: 160px; left: 50%; transform: translateX(-50%);
-    background: var(--surface); border: 2px solid var(--gold);
-    border-radius: 18px; padding: 18px 22px; text-align: center; z-index: 40;
-    min-width: 220px; box-shadow: 0 16px 48px rgba(0,0,0,.7);
-    animation: popIn .22s ease;
-  }
-  @keyframes popIn { from { transform: translateX(-50%) scale(.88); opacity: 0; } to { transform: translateX(-50%) scale(1); opacity: 1; } }
-  #detected-popup.show { display: block; }
-  #det-label { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-  #det-num {
-    font-size: 32px; font-weight: 800; letter-spacing: 3px;
-    color: var(--gold); margin-bottom: 14px;
-  }
-  #use-detected {
-    width: 100%; padding: 12px; border: none; border-radius: 10px;
-    background: linear-gradient(135deg, var(--gold), var(--orange));
-    color: #000; font-size: 15px; font-weight: 700; cursor: pointer;
-    margin-bottom: 8px;
-  }
-  #retry-ocr {
-    width: 100%; padding: 11px; border: 1px solid var(--border); border-radius: 10px;
-    background: transparent; color: var(--muted); font-size: 14px; cursor: pointer;
-  }
-
-  /* Scan footer */
-  #scan-footer {
-    background: rgba(0,0,0,.85); backdrop-filter: blur(10px);
-    padding: 14px 16px 28px; display: flex; flex-direction: column; gap: 10px;
-  }
-  #capture-btn {
-    width: 100%; padding: 17px; border: none; border-radius: var(--radius);
-    background: linear-gradient(135deg, var(--gold), var(--orange));
-    color: #000; font-size: 16px; font-weight: 800; cursor: pointer; letter-spacing: .3px;
-    box-shadow: 0 4px 20px rgba(247,201,72,.4);
-    transition: transform .1s;
-  }
+  #ocr-msg { font-size: 15px; color: var(--gold); font-weight: 600; text-align: center; padding: 0 24px; }
+  #scan-footer { background: rgba(0,0,0,.85); backdrop-filter: blur(10px); padding: 14px 16px 28px; display: flex; flex-direction: column; gap: 10px; }
+  #capture-btn { width: 100%; padding: 17px; border: none; border-radius: var(--radius); background: linear-gradient(135deg, var(--gold), var(--orange)); color: #000; font-size: 16px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 20px rgba(247,201,72,.4); }
   #capture-btn:active { transform: scale(.97); }
-  #file-label {
-    display: block; width: 100%; padding: 15px; border-radius: var(--radius);
-    background: var(--surface2); border: 1.5px solid var(--border);
-    color: var(--text); font-size: 15px; font-weight: 600;
-    text-align: center; cursor: pointer;
-  }
+  #file-label { display: block; width: 100%; padding: 15px; border-radius: var(--radius); background: var(--surface2); border: 1.5px solid var(--border); color: var(--text); font-size: 15px; font-weight: 600; text-align: center; cursor: pointer; }
   #file-input { display: none; }
-
-  /* No-camera notice */
-  #no-camera-notice {
-    display: none; flex: 1; flex-direction: column;
-    align-items: center; justify-content: center; gap: 12px; padding: 32px;
-    text-align: center;
-  }
+  #no-camera-notice { display: none; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 32px; text-align: center; }
   #no-camera-notice.show { display: flex; }
   #no-camera-notice .icon { font-size: 52px; }
   #no-camera-notice p { font-size: 14px; color: var(--muted); line-height: 1.6; }
-
-  canvas { display: none; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">🃏</div>
-  <h1>Pokémon Card Scanner</h1>
-  <p class="subtitle">Escaneie ou digite o número da carta</p>
+<header id="topbar">
+  <div class="brand"><span class="logo">🃏</span><span class="title">PokéScanner</span></div>
+  <div class="topbar-controls">
+    <select id="lang-select" class="mini-select" title="Idioma da carta"></select>
+    <select id="currency-select" class="mini-select" title="Moeda"></select>
+  </div>
 </header>
 
-<div class="search-row">
-  <input id="code" type="text" placeholder="ex: 117/94" autocomplete="off" inputmode="decimal"/>
-  <button id="scan-btn" title="Escanear carta">📷</button>
-</div>
-<div class="dd-wrap">
-  <div id="dropdown"></div>
-</div>
-<div id="status"></div>
+<main>
 
-<div id="result">
-  <div class="result-row">
-    <img id="card-img"/>
-    <div class="card-info">
-      <p id="card-name"></p>
-      <p id="card-set"></p>
-      <table class="info-table">
-        <tr><td class="label">Raridade</td><td id="card-rarity" class="value"></td></tr>
-        <tr><td class="label">Número</td><td id="card-num" class="value"></td></tr>
-        <tr><td class="label">ID TCGdex</td><td id="card-id" class="value"></td></tr>
-      </table>
+  <!-- ═══════════ DASHBOARD ═══════════ -->
+  <section id="view-dashboard" class="view active">
+    <div class="dash-hero">
+      <div class="label">Valor total da coleção</div>
+      <div class="value" id="dash-total-value">R$ 0,00</div>
     </div>
-  </div>
-</div>
+    <div class="stat-grid">
+      <div class="stat-tile"><div class="num" id="dash-total-cards">0</div><div class="lbl">Cartas</div></div>
+      <div class="stat-tile"><div class="num" id="dash-distinct-cards">0</div><div class="lbl">Cartas diferentes</div></div>
+      <div class="stat-tile wide"><div class="num" id="dash-most-valuable">Nenhuma carta ainda</div><div class="lbl">Carta mais valiosa</div></div>
+    </div>
+    <button class="btn-scan-big" id="btn-scan-dashboard">📷 ESCANEAR CARTA</button>
+    <button class="btn-search-shortcut" id="btn-search-shortcut">🔍 Pesquisar carta manualmente</button>
 
-<!-- ════════════ SCAN MODAL ════════════ -->
+    <div class="block-title"><h3>Últimas adicionadas</h3></div>
+    <div id="dash-recent"></div>
+  </section>
+
+  <!-- ═══════════ BUSCA MANUAL ═══════════ -->
+  <section id="view-search" class="view">
+    <div class="block-title"><h3>Pesquisar carta</h3></div>
+    <div class="search-box">
+      <input id="search-input" type="text" placeholder="Nome (Charizard) ou número (117/94)" autocomplete="off"/>
+    </div>
+    <div id="search-status"></div>
+    <div id="search-results"></div>
+  </section>
+
+  <!-- ═══════════ CONFIRMAÇÃO PÓS-SCAN ═══════════ -->
+  <section id="view-confirm" class="view">
+    <div class="block-title"><h3>Confirme a carta</h3></div>
+    <div id="confirm-read-summary"></div>
+    <div id="confirm-status" class="muted" style="margin-bottom:10px;font-size:13px;"></div>
+    <div id="confirm-list"></div>
+    <div style="display:flex;gap:10px;margin-top:10px;">
+      <button class="btn-secondary" id="confirm-manual-search" style="flex:1;">🔍 Buscar manualmente</button>
+      <button class="btn-secondary" id="confirm-cancel" style="flex:1;">✕ Cancelar</button>
+    </div>
+  </section>
+
+  <!-- ═══════════ DETALHE DA CARTA ═══════════ -->
+  <section id="view-detail" class="view">
+    <div class="back-row"><button id="detail-back">← Voltar</button></div>
+    <div id="detail-panel"></div>
+  </section>
+
+  <!-- ═══════════ COLEÇÃO ═══════════ -->
+  <section id="view-collection" class="view">
+    <div class="block-title"><h3>Minha coleção</h3></div>
+    <div class="coll-stats">
+      <div class="stat-tile"><div class="num" id="coll-total-value">R$ 0,00</div><div class="lbl">Valor total</div></div>
+      <div class="stat-tile"><div class="num" id="coll-total-cards">0</div><div class="lbl">Cartas</div></div>
+      <div class="stat-tile"><div class="num" id="coll-distinct-cards">0</div><div class="lbl">Diferentes</div></div>
+    </div>
+    <div class="filter-row">
+      <input id="collection-search" type="text" placeholder="Buscar na coleção..."/>
+      <select id="collection-sort">
+        <option value="recent">Recentes</option>
+        <option value="name">Nome (A-Z)</option>
+        <option value="value_desc">Maior valor</option>
+        <option value="value_asc">Menor valor</option>
+        <option value="set">Coleção</option>
+        <option value="rarity">Raridade</option>
+      </select>
+    </div>
+    <div id="collection-list"></div>
+  </section>
+
+</main>
+
+<!-- ═══════════ NAV INFERIOR ═══════════ -->
+<nav id="bottomnav">
+  <button class="nav-item active" data-view="dashboard"><span class="nav-icon">🏠</span>Início</button>
+  <button class="nav-item" data-view="search"><span class="nav-icon">🔍</span>Buscar</button>
+  <button class="nav-fab" id="btn-scan-fab" title="Escanear carta">📷</button>
+  <button class="nav-item" data-view="collection"><span class="nav-icon">🗂️</span>Coleção</button>
+</nav>
+
+<div id="toast"></div>
+
+<!-- ═══════════ SCAN MODAL ═══════════ -->
 <div id="scan-modal">
   <div id="scan-header">
     <span id="scan-title">📷 Enquadre a carta inteira</span>
     <button id="close-scan">✕</button>
   </div>
-
   <div id="camera-wrap">
     <video id="camera-video" autoplay playsinline muted></video>
-
-    <!-- Guide -->
     <div id="scan-overlay">
       <div id="scan-box"><div id="scan-line"></div></div>
       <p id="scan-hint">Enquadre a carta inteira dentro do guia<br>e toque em <strong>Capturar</strong></p>
     </div>
-
-    <!-- No camera fallback -->
     <div id="no-camera-notice">
       <div class="icon">📁</div>
       <p>Câmera não disponível neste navegador.<br>Use o botão abaixo para escolher uma foto da carta.</p>
     </div>
-
-    <!-- OCR spinner -->
     <div id="ocr-overlay">
       <div class="spinner"></div>
       <span id="ocr-msg">Identificando carta...</span>
     </div>
-
-    <!-- Detected card confirmation -->
-    <div id="detected-popup">
-      <div id="det-label">Carta detectada</div>
-      <div id="det-num"></div>
-      <div id="det-name" style="font-size:14px;color:var(--muted);margin-bottom:14px;"></div>
-      <button id="use-detected">Buscar esta carta ✓</button>
-      <button id="retry-ocr">↩ Tentar novamente</button>
-    </div>
   </div>
-
   <div id="scan-footer">
     <button id="capture-btn">📸 Capturar</button>
     <label id="file-label">
@@ -329,407 +471,6 @@
   </div>
 </div>
 
-<canvas id="ocr-canvas"></canvas>
-
-<script>
-/* ═══════════════════════════════════════
-   SEARCH LOGIC
-═══════════════════════════════════════ */
-const input    = document.getElementById('code');
-const dropdown = document.getElementById('dropdown');
-const status   = document.getElementById('status');
-const resultEl = document.getElementById('result');
-
-let debounceTimer = null;
-let currentSearch = 0;
-
-function closeDropdown() { dropdown.style.display = 'none'; dropdown.innerHTML = ''; }
-
-function norm(v) { return String(v).replace(/^0+(?=\d)/, ''); }
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-function setIdFromCardId(id) {
-  const i = id.lastIndexOf('-'); return i === -1 ? id : id.substring(0, i);
-}
-
-async function showCard(cardId) {
-  closeDropdown();
-  status.textContent = 'Carregando carta...';
-  resultEl.style.display = 'none';
-  try {
-    const res = await fetch('https://api.tcgdex.net/v2/en/cards/' + cardId);
-    if (!res.ok) throw new Error('status ' + res.status);
-    const card = await res.json();
-
-    document.getElementById('card-img').src = card.image ? card.image + '/high.png' : '';
-    document.getElementById('card-name').textContent = card.name || '';
-    document.getElementById('card-set').textContent = (card.set && card.set.name) || '';
-    document.getElementById('card-rarity').textContent = card.rarity || '-';
-    const cc = card.set && card.set.cardCount;
-    document.getElementById('card-num').textContent =
-      card.localId ? card.localId + (cc ? '/' + (cc.official || cc.total) : '') : '-';
-    document.getElementById('card-id').textContent = card.id || '-';
-
-    status.textContent = '';
-    resultEl.style.display = 'block';
-  } catch(e) {
-    status.textContent = 'Erro ao carregar a carta: ' + e.message;
-  }
-}
-
-async function runSearch(raw) {
-  raw = (raw || '').trim();
-  if (!raw) { closeDropdown(); status.textContent = ''; return; }
-
-  const parts   = raw.split('/');
-  const localId = norm(parts[0].trim());
-  const total   = parts[1] ? norm(parts[1].trim()) : null;
-
-  if (!localId || !/^\d+[A-Za-z]*$/.test(localId)) {
-    closeDropdown(); status.textContent = 'Digite um número válido.'; return;
-  }
-
-  resultEl.style.display = 'none';
-  const sid = ++currentSearch;
-
-  status.textContent = 'Carregando lista de sets...';
-  closeDropdown();
-
-  try {
-    if (!window._tcgSetsCache) {
-      const r = await fetch('https://api.tcgdex.net/v2/en/sets');
-      if (!r.ok) throw new Error('Erro sets: ' + r.status);
-      window._tcgSetsCache = await r.json();
-    }
-    if (sid !== currentSearch) return;
-
-    let sets = window._tcgSetsCache;
-
-    if (total) {
-      sets = sets.filter(s => {
-        if (!s.cardCount) return false;
-        const off = norm(String(s.cardCount.official ?? s.cardCount.total ?? ''));
-        const tot = norm(String(s.cardCount.total ?? ''));
-        return off === total || tot === total;
-      });
-      if (!sets.length) {
-        status.textContent = 'Nenhum set com ' + total + ' cartas. Tente só o número (' + localId + ').';
-        return;
-      }
-    }
-
-    status.textContent = 'Buscando nos sets (' + sets.length + ')...';
-
-    const tryF = (setId, lid) =>
-      fetch('https://api.tcgdex.net/v2/en/sets/' + setId + '/' + lid)
-        .then(r => r.ok ? r.json() : null).catch(() => null);
-
-    const baseRes = await Promise.all(sets.map(s => tryF(s.id, localId)));
-    if (sid !== currentSearch) return;
-
-    const setsHit  = sets.filter((_, i) => baseRes[i]?.id);
-    const baseCards = baseRes.filter(c => c?.id);
-
-    const varRes = await Promise.all(
-      setsHit.flatMap(s => ['a','b','c'].map(sfx => tryF(s.id, localId + sfx)))
-    );
-    if (sid !== currentSearch) return;
-
-    const found = [...baseCards, ...varRes.filter(c => c?.id)];
-
-    if (!found.length) {
-      closeDropdown();
-      status.textContent = total
-        ? 'Nenhuma carta ' + localId + '/' + total + ' encontrada. Tente só o número.'
-        : 'Nenhuma carta com número ' + localId + '.';
-      return;
-    }
-
-    if (found.length === 1) { status.textContent = '1 carta encontrada!'; showCard(found[0].id); return; }
-
-    status.textContent = found.length + ' carta(s)/variante(s) — escolha a que bate com a sua:';
-    dropdown.innerHTML = '';
-    found.forEach(card => {
-      const setName = (card.set && card.set.name) || setIdFromCardId(card.id);
-      const row = document.createElement('div');
-      row.className = 'suggestion';
-      row.innerHTML =
-        '<img src="' + (card.image ? card.image + '/low.png' : '') + '" onerror="this.style.visibility=\'hidden\'"/>' +
-        '<div><div class="name">' + escHtml(card.name || '') + '</div>' +
-        '<div class="set">' + escHtml(setName) + ' — #' + escHtml(String(card.localId)) + '</div></div>';
-      row.addEventListener('click', () => showCard(card.id));
-      dropdown.appendChild(row);
-    });
-    dropdown.style.display = 'block';
-
-  } catch(e) {
-    if (sid !== currentSearch) return;
-    status.textContent = 'Erro: ' + e.message;
-  }
-}
-
-input.addEventListener('input', () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => runSearch(input.value), 500);
-});
-
-document.addEventListener('click', e => {
-  if (!dropdown.contains(e.target) && e.target !== input) closeDropdown();
-});
-
-/* ═══════════════════════════════════════
-   CAMERA / OCR
-═══════════════════════════════════════ */
-const scanModal     = document.getElementById('scan-modal');
-const camVideo      = document.getElementById('camera-video');
-const ocrOverlay    = document.getElementById('ocr-overlay');
-const ocrMsg        = document.getElementById('ocr-msg');
-const detPopup      = document.getElementById('detected-popup');
-const detNum        = document.getElementById('det-num');
-const useDetBtn     = document.getElementById('use-detected');
-const retryBtn      = document.getElementById('retry-ocr');
-const captureBtn    = document.getElementById('capture-btn');
-const fileInput     = document.getElementById('file-input');
-const ocrCanvas     = document.getElementById('ocr-canvas');
-const noCamNotice   = document.getElementById('no-camera-notice');
-const scanOverlay   = document.getElementById('scan-overlay');
-
-let camStream  = null;
-let lastDetected = '';
-let lastDetectedName = '';
-
-document.getElementById('scan-btn').addEventListener('click', openScanner);
-document.getElementById('close-scan').addEventListener('click', closeScanner);
-
-async function openScanner() {
-  scanModal.classList.add('open');
-  detPopup.classList.remove('show');
-  ocrOverlay.classList.remove('show');
-  noCamNotice.classList.remove('show');
-  scanOverlay.style.display = '';
-  captureBtn.style.display = '';
-
-  try {
-    camStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
-    });
-    camVideo.srcObject = camStream;
-  } catch(e) {
-    // No camera access (HTTP or denied) — show file-only mode
-    camVideo.style.display = 'none';
-    scanOverlay.style.display = 'none';
-    captureBtn.style.display = 'none';
-    noCamNotice.classList.add('show');
-    document.getElementById('scan-title').textContent = '📁 Escolha uma foto da carta';
-  }
-}
-
-function closeScanner() {
-  scanModal.classList.remove('open');
-  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
-  camVideo.srcObject = null;
-  camVideo.style.display = '';
-  detPopup.classList.remove('show');
-  ocrOverlay.classList.remove('show');
-}
-
-captureBtn.addEventListener('click', () => {
-  if (!camVideo.videoWidth) return;
-  const ctx = ocrCanvas.getContext('2d');
-  ocrCanvas.width  = camVideo.videoWidth;
-  ocrCanvas.height = camVideo.videoHeight;
-  ctx.drawImage(camVideo, 0, 0);
-  processOCR(ocrCanvas);
-});
-
-fileInput.addEventListener('change', e => {
-  const file = e.target.files[0]; if (!file) return;
-  const img = new Image();
-  const url = URL.createObjectURL(file);
-  img.onload = () => {
-    const ctx = ocrCanvas.getContext('2d');
-    ocrCanvas.width = img.width; ocrCanvas.height = img.height;
-    ctx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
-    processOCR(ocrCanvas);
-  };
-  img.src = url;
-  fileInput.value = '';
-});
-
-async function loadTesseract() {
-  if (window.Tesseract) return;
-  ocrMsg.textContent = 'Carregando OCR (primeira vez)...';
-  await new Promise((res, rej) => {
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
-    s.onload = res; s.onerror = () => rej(new Error('Falha ao carregar Tesseract.js'));
-    document.head.appendChild(s);
-  });
-}
-
-// Crop a vertical slice of a canvas and scale it up
-function cropRegion(src, yStart, yEnd, scale) {
-  const sw = src.width, sh = src.height;
-  const sy = Math.floor(sh * yStart);
-  const sH = Math.floor(sh * (yEnd - yStart));
-  const c = document.createElement('canvas');
-  c.width = Math.round(sw * scale);
-  c.height = Math.round(sH * scale);
-  c.getContext('2d').drawImage(src, 0, sy, sw, sH, 0, 0, c.width, c.height);
-  return c;
-}
-
-// Sharpen contrast without binarizing — works much better with Tesseract
-function enhanceContrast(src) {
-  const c = document.createElement('canvas');
-  c.width = src.width; c.height = src.height;
-  const ctx = c.getContext('2d');
-  ctx.filter = 'contrast(2) saturate(0) brightness(1.1)';
-  ctx.drawImage(src, 0, 0);
-  return c;
-}
-
-// Run Tesseract with a whitelist, return trimmed text
-async function ocrWith(canvas, whitelist, psm) {
-  const opts = { tessedit_pageseg_mode: String(psm) };
-  if (whitelist) opts.tessedit_char_whitelist = whitelist;
-  const { data } = await Tesseract.recognize(canvas, 'eng', opts);
-  return (data.text || '').trim();
-}
-
-async function processOCR(canvas) {
-  ocrOverlay.classList.add('show');
-  detPopup.classList.remove('show');
-
-  try {
-    await loadTesseract();
-
-    /* ── NOME: topo da carta (0–18%), 4× scale ── */
-    ocrMsg.textContent = 'Lendo nome...';
-    const nameLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz2- ';
-
-    // Try: enhanced contrast first, then raw color
-    const nameRaw4 = cropRegion(canvas, 0, 0.18, 4);
-    let nameRaw = await ocrWith(enhanceContrast(nameRaw4), nameLetters, 7);
-    if (!nameRaw || nameRaw.replace(/\s/g,'').length < 3)
-      nameRaw = await ocrWith(nameRaw4, nameLetters, 6);
-
-    let detectedName = '';
-    for (const token of nameRaw.split(/\s+/)) {
-      const clean = token.replace(/[^A-Za-z2]/g, '');
-      if (clean.length >= 3) { detectedName = clean; break; }
-    }
-
-    /* ── NÚMERO: rodapé da carta (85–100%), 4× scale ── */
-    ocrMsg.textContent = 'Lendo número...';
-    const numLetters = '0123456789/';
-
-    const numRaw4 = cropRegion(canvas, 0.85, 1.0, 4);
-    let numRaw = (await ocrWith(enhanceContrast(numRaw4), numLetters, 7)).replace(/\s+/g,'');
-    if (!numRaw.match(/\d/))
-      numRaw = (await ocrWith(numRaw4, numLetters, 6)).replace(/\s+/g,'');
-
-    // Common OCR confusion: O→0, I/l→1, S→5, B→8
-    numRaw = numRaw.replace(/[OoQ]/g,'0').replace(/[IilL]/g,'1').replace(/S/g,'5').replace(/B/g,'8');
-    const numMatch = numRaw.match(/(\d{1,4})\/(\d{1,4})/) || numRaw.match(/(\d{1,4})/);
-    const detectedNum = numMatch ? numMatch[0] : '';
-
-    ocrOverlay.classList.remove('show');
-
-    if (detectedNum || detectedName) {
-      lastDetected     = detectedNum || '';
-      lastDetectedName = detectedName || '';
-      detNum.textContent = detectedNum || '—';
-      document.getElementById('det-name').textContent = detectedName ? '🎴 ' + detectedName : '';
-      detPopup.classList.add('show');
-    } else {
-      status.textContent = 'Não foi possível identificar a carta. Tente enquadrar melhor ou digitar.';
-      closeScanner();
-    }
-
-  } catch(e) {
-    ocrOverlay.classList.remove('show');
-    status.textContent = 'Erro OCR: ' + e.message;
-    closeScanner();
-  }
-
-}
-
-useDetBtn.addEventListener('click', () => {
-  closeScanner();
-  if (lastDetectedName) {
-    runSearchByName(lastDetectedName, lastDetected);
-  } else {
-    input.value = lastDetected;
-    runSearch(lastDetected);
-  }
-});
-
-async function runSearchByName(name, numHint) {
-  status.textContent = 'Buscando "' + name + '"...';
-  resultEl.style.display = 'none';
-  closeDropdown();
-  try {
-    const r = await fetch('https://api.tcgdex.net/v2/en/cards?name=' + encodeURIComponent(name));
-    if (!r.ok) throw new Error('status ' + r.status);
-    let cards = await r.json();
-    if (!Array.isArray(cards) || !cards.length) {
-      // Fallback to number search if name yields nothing
-      if (numHint) { input.value = numHint; runSearch(numHint); return; }
-      status.textContent = 'Nenhuma carta encontrada para "' + name + '". Tente digitar.';
-      return;
-    }
-    // Filter by number hint if available
-    if (numHint) {
-      const parts = numHint.split('/');
-      const localId = norm(parts[0]);
-      const total   = parts[1] ? norm(parts[1]) : null;
-      const filtered = cards.filter(c => {
-        if (norm(String(c.localId || '')) !== localId) return false;
-        if (total && c.set && c.set.cardCount) {
-          const off = norm(String(c.set.cardCount.official ?? c.set.cardCount.total ?? ''));
-          const tot = norm(String(c.set.cardCount.total ?? ''));
-          return off === total || tot === total;
-        }
-        return true;
-      });
-      if (filtered.length) cards = filtered;
-    }
-    if (cards.length === 1) {
-      status.textContent = '1 carta encontrada!';
-      showCard(cards[0].id);
-      return;
-    }
-    input.value = numHint || name;
-    status.textContent = cards.length + ' carta(s) — escolha a que bate com a sua:';
-    dropdown.innerHTML = '';
-    cards.forEach(card => {
-      const setName = (card.set && card.set.name) || setIdFromCardId(card.id);
-      const row = document.createElement('div');
-      row.className = 'suggestion';
-      row.innerHTML =
-        '<img src="' + (card.image ? card.image + '/low.png' : '') + '" onerror="this.style.visibility=\'hidden\'"/>' +
-        '<div><div class="name">' + escHtml(card.name || '') + '</div>' +
-        '<div class="set">' + escHtml(setName) + ' — #' + escHtml(String(card.localId)) + '</div></div>';
-      row.addEventListener('click', () => showCard(card.id));
-      dropdown.appendChild(row);
-    });
-    dropdown.style.display = 'block';
-  } catch(e) {
-    status.textContent = 'Erro: ' + e.message;
-  }
-}
-
-retryBtn.addEventListener('click', () => {
-  detPopup.classList.remove('show');
-});
-</script>
-
+<script type="module" src="js/app.js?v=2"></script>
 </body>
 </html>
