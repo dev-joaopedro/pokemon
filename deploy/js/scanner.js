@@ -194,8 +194,10 @@ export async function identifyCard(canvas, { onProgress, signal } = {}) {
     return await identifyViaVision(canvas, { signal });
   } catch (err) {
     if (err.code === 'ABORTED') throw err;
-    if (err.code !== 'NO_API_KEY' && err.code !== 'NETWORK') throw err;
-    // Sem função configurada ou sem rede até o backend: tenta o leitor local.
+    // Qualquer falha em obter um resultado de visão utilizável — sem chave
+    // configurada, sem rede, erro do servidor, recusa do modelo, rate limit —
+    // degrada para o leitor local em vez de deixar o usuário sem alternativa.
+    // A única exceção é o cancelamento explícito do próprio usuário (acima).
     return await identifyViaOcr(canvas, { onProgress });
   }
 }
@@ -222,6 +224,81 @@ export function captureFrame(videoEl) {
   canvas.getContext('2d').drawImage(videoEl, 0, 0);
   return canvas;
 }
+
+/* ═══════════════════════ Detecção automática (scanner ao vivo) ═══════════════════════
+ *
+ * Uma carta não tem chip nem código de barras — "escanear" uma carta física
+ * só pode significar capturar uma imagem dela e analisá-la. O que dá a
+ * sensação de "scanner" em vez de "foto" é não precisar apertar um botão: o
+ * app olha o vídeo continuamente e só dispara uma leitura de verdade (OCR ou
+ * visão) quando o frame está parado e nítido — sem isso, cada tremida de mão
+ * geraria uma tentativa de leitura cara e inútil.
+ *
+ * As funções abaixo são deliberadamente baratas (rodam a cada ~200ms sobre
+ * uma imagem 40×40) para servirem de "vale a pena tentar ler agora?" antes de
+ * qualquer chamada de OCR/visão de verdade.
+ *
+ * Os limiares (THRESHOLDS) foram escolhidos por raciocínio, não calibrados
+ * contra uma câmera real — este ambiente de desenvolvimento não tem acesso a
+ * uma câmera física para medir valores reais de nitidez/estabilidade. Ajuste-
+ * os se, em uso real, o app disparar leituras cedo demais (baixe
+ * SHARPNESS_MIN) ou tarde demais (suba os dois, com cautela).
+ */
+
+/** Frame reduzido em tons de cinza — barato o bastante para rodar a cada verificação. */
+export function grabTinyGray(source, size = 40) {
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, size, size);
+  const { data } = ctx.getImageData(0, 0, size, size);
+  const gray = new Float32Array(size * size);
+  for (let i = 0; i < gray.length; i++) {
+    const o = i * 4;
+    gray[i] = data[o] * 0.299 + data[o + 1] * 0.587 + data[o + 2] * 0.114;
+  }
+  return gray;
+}
+
+/** Diferença média entre dois frames pequenos — alto = câmera ainda em movimento. */
+export function frameDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return Infinity;
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+  return sum / a.length;
+}
+
+/** Energia de borda aproximada — baixo valor indica imagem fora de foco. */
+export function frameSharpness(gray, size = 40) {
+  let sum = 0;
+  let n = 0;
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const i = y * size + x;
+      const gx = gray[i + 1] - gray[i - 1];
+      const gy = gray[i + size] - gray[i - size];
+      sum += gx * gx + gy * gy;
+      n++;
+    }
+  }
+  return n ? sum / n : 0;
+}
+
+export const AUTO_SCAN_THRESHOLDS = {
+  /** Abaixo disso, consideramos a câmera "parada" (frames quase idênticos). */
+  stabilityMaxDiff: 6,
+  /** Acima disso, consideramos a imagem "em foco" o bastante para tentar ler. */
+  sharpnessMin: 900,
+  /** Verificações estáveis seguidas exigidas antes de disparar uma leitura real. */
+  stableChecksNeeded: 3,
+  /** Intervalo entre verificações leves (estabilidade/nitidez). */
+  checkIntervalMs: 220,
+  /** Tempo mínimo entre duas tentativas de leitura de verdade (OCR/visão). */
+  attemptCooldownMs: 2200,
+  /** Tentativas reais seguidas sem sucesso antes de pausar e pedir ação manual. */
+  maxConsecutiveFails: 6,
+};
 
 export function loadImageFile(file) {
   return new Promise((resolve, reject) => {

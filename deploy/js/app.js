@@ -8,6 +8,7 @@ import * as Collection from './collection.js';
 import { getCardInLanguage } from './translate.js';
 import {
   identifyCard, startCamera, stopCamera, captureFrame, loadImageFile, PROBLEM_MESSAGES,
+  grabTinyGray, frameDiff, frameSharpness, AUTO_SCAN_THRESHOLDS,
 } from './scanner.js';
 
 /* ═══════════════════════════ Estado global ═══════════════════════════ */
@@ -211,6 +212,18 @@ const noCamNotice = $('#no-camera-notice');
 const scanOverlay = $('#scan-overlay');
 const captureBtn = $('#capture-btn');
 const fileInput = $('#file-input');
+const autoStatusEl = $('#auto-status');
+const scanHintEl = $('#scan-hint');
+const toggleAutoBtn = $('#toggle-auto');
+
+let autoScanEnabled = true; // preferência do usuário nesta sessão (chip "Auto")
+let autoScanTimer = null;
+let autoScanBusy = false; // uma leitura real (OCR/visão) está em andamento
+let autoScanLastGray = null;
+let autoScanStableCount = 0;
+let autoScanFails = 0;
+let autoScanLastAttemptAt = 0;
+let autoScanPausedForManual = false; // pausado após muitas falhas seguidas
 
 async function openScanner() {
   scanModal.classList.add('open');
@@ -219,14 +232,20 @@ async function openScanner() {
   scanOverlay.style.display = '';
   captureBtn.style.display = '';
   camVideo.style.display = '';
-  $('#scan-title').textContent = '📷 Enquadre a carta inteira';
+  toggleAutoBtn.style.display = '';
+  $('#scan-title').textContent = '📷 Escanear carta';
+  scanHintEl.innerHTML = 'Aponte a câmera para a carta<br>a detecção é automática';
+  autoStatusEl.textContent = '';
+  resetAutoScanState();
 
   try {
     state.camStream = await startCamera(camVideo);
+    if (autoScanEnabled) startAutoScan();
   } catch {
     camVideo.style.display = 'none';
     scanOverlay.style.display = 'none';
     captureBtn.style.display = 'none';
+    toggleAutoBtn.style.display = 'none';
     noCamNotice.classList.add('show');
     $('#scan-title').textContent = '📁 Escolha uma foto da carta';
   }
@@ -234,6 +253,7 @@ async function openScanner() {
 
 function closeScanner() {
   scanModal.classList.remove('open');
+  stopAutoScan();
   if (state.camStream) { stopCamera(state.camStream); state.camStream = null; }
   camVideo.srcObject = null;
   ocrOverlay.classList.remove('show');
@@ -243,8 +263,39 @@ $('#close-scan').addEventListener('click', closeScanner);
 
 captureBtn.addEventListener('click', () => {
   if (!camVideo.videoWidth) return;
-  handleCapturedCanvas(captureFrame(camVideo));
+  handleCapturedCanvas(captureFrame(camVideo), { silent: false });
 });
+
+toggleAutoBtn.addEventListener('click', () => {
+  // Depois de muitas falhas seguidas o loop se pausa sozinho mas
+  // autoScanEnabled continua true (a preferência do usuário não mudou) — sem
+  // este caso especial, tocar no botão para "tentar de novo" (como o texto de
+  // dica instrui) seria interpretado como "desligar", que é o oposto do que
+  // o usuário pediu.
+  if (autoScanPausedForManual) {
+    resetAutoScanState();
+    autoScanEnabled = true;
+    updateAutoToggleUI();
+    startAutoScan();
+    return;
+  }
+
+  autoScanEnabled = !autoScanEnabled;
+  updateAutoToggleUI();
+  if (autoScanEnabled) {
+    resetAutoScanState();
+    startAutoScan();
+  } else {
+    stopAutoScan();
+    autoStatusEl.textContent = '';
+  }
+});
+
+function updateAutoToggleUI() {
+  toggleAutoBtn.classList.toggle('active', autoScanEnabled);
+  toggleAutoBtn.textContent = autoScanEnabled ? '🔄 Auto' : '⏸ Manual';
+}
+updateAutoToggleUI();
 
 fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -255,44 +306,128 @@ fileInput.addEventListener('change', async (e) => {
     return;
   }
   try {
-    handleCapturedCanvas(await loadImageFile(file));
+    handleCapturedCanvas(await loadImageFile(file), { silent: false });
   } catch (err) {
     toast(friendlyError(err), 'error');
   }
 });
 
-async function handleCapturedCanvas(canvas) {
-  ocrOverlay.classList.add('show');
-  ocrMsg.textContent = 'Identificando carta...';
+/* ── Loop de detecção automática ──────────────────────────────────────────
+ * A cada AUTO_SCAN_THRESHOLDS.checkIntervalMs, compara um frame reduzido com
+ * o anterior. Só dispara uma leitura de verdade (cara — CPU do OCR local ou
+ * uma chamada de rede à visão) quando a câmera está parada e em foco por
+ * algumas verificações seguidas. Isso é o que faz a experiência parecer um
+ * scanner de código de barras em vez de "tirar foto e esperar".
+ */
+function resetAutoScanState() {
+  autoScanLastGray = null;
+  autoScanStableCount = 0;
+  autoScanFails = 0;
+  autoScanLastAttemptAt = 0;
+  autoScanPausedForManual = false;
+}
+
+function startAutoScan() {
+  stopAutoScan();
+  autoStatusEl.textContent = '🔍 Procurando carta...';
+  autoScanTimer = setInterval(autoScanTick, AUTO_SCAN_THRESHOLDS.checkIntervalMs);
+}
+
+function stopAutoScan() {
+  if (autoScanTimer) { clearInterval(autoScanTimer); autoScanTimer = null; }
+}
+
+function autoScanTick() {
+  if (autoScanBusy || autoScanPausedForManual || !camVideo.videoWidth) return;
+
+  const gray = grabTinyGray(camVideo);
+  const diff = frameDiff(autoScanLastGray, gray);
+  const sharp = frameSharpness(gray);
+  autoScanLastGray = gray;
+
+  const isStable = diff < AUTO_SCAN_THRESHOLDS.stabilityMaxDiff;
+  const isSharp = sharp > AUTO_SCAN_THRESHOLDS.sharpnessMin;
+
+  if (isStable && isSharp) {
+    autoScanStableCount++;
+    autoStatusEl.textContent = autoScanStableCount >= AUTO_SCAN_THRESHOLDS.stableChecksNeeded
+      ? '✨ Lendo...'
+      : '📌 Mantendo o foco...';
+  } else {
+    autoScanStableCount = 0;
+    autoStatusEl.textContent = isSharp ? '🔍 Aproxime e segure firme...' : '🔍 Ajuste o foco...';
+  }
+
+  const cooldownElapsed = Date.now() - autoScanLastAttemptAt > AUTO_SCAN_THRESHOLDS.attemptCooldownMs;
+  if (autoScanStableCount >= AUTO_SCAN_THRESHOLDS.stableChecksNeeded && cooldownElapsed) {
+    autoScanStableCount = 0;
+    autoScanLastAttemptAt = Date.now();
+    handleCapturedCanvas(captureFrame(camVideo), { silent: true });
+  }
+}
+
+async function handleCapturedCanvas(canvas, { silent = false } = {}) {
+  autoScanBusy = true;
+  if (!silent) {
+    ocrOverlay.classList.add('show');
+    ocrMsg.textContent = 'Identificando carta...';
+  }
 
   const timeoutGuard = setTimeout(() => {
     // Nunca deixamos o usuário preso numa tela de carregamento infinita.
-    ocrMsg.textContent = 'Isso está demorando mais que o normal...';
+    if (!silent) ocrMsg.textContent = 'Isso está demorando mais que o normal...';
   }, 12000);
 
   try {
     const reading = await identifyCard(canvas, {
-      onProgress: (msg) => { ocrMsg.textContent = msg; },
+      onProgress: (msg) => { if (!silent) ocrMsg.textContent = msg; },
     });
     clearTimeout(timeoutGuard);
-    ocrOverlay.classList.remove('show');
+    if (!silent) ocrOverlay.classList.remove('show');
 
-    if (reading.problem && PROBLEM_MESSAGES[reading.problem]) {
-      toast(PROBLEM_MESSAGES[reading.problem], 'error');
+    const usable = reading.name || reading.number;
+    const hasProblem = reading.problem && PROBLEM_MESSAGES[reading.problem];
+
+    if (!usable || hasProblem) {
+      autoScanBusy = false;
+      if (!silent) {
+        toast(
+          hasProblem ? PROBLEM_MESSAGES[reading.problem] : 'Não conseguimos ler a carta. Tente melhorar o enquadramento e a luz.',
+          'error',
+        );
+      } else {
+        registerAutoScanFailure();
+      }
       return;
     }
-    if (!reading.name && !reading.number) {
-      toast('Não conseguimos ler a carta. Tente melhorar o enquadramento e a luz.', 'error');
-      return;
-    }
 
+    stopAutoScan();
     closeScanner();
     await handleReading(reading);
   } catch (err) {
     clearTimeout(timeoutGuard);
-    ocrOverlay.classList.remove('show');
-    toast(friendlyError(err), 'error');
+    autoScanBusy = false;
+    if (!silent) {
+      ocrOverlay.classList.remove('show');
+      toast(friendlyError(err), 'error');
+    } else {
+      registerAutoScanFailure();
+    }
+    return;
   }
+  autoScanBusy = false;
+}
+
+function registerAutoScanFailure() {
+  autoScanFails++;
+  if (autoScanFails < AUTO_SCAN_THRESHOLDS.maxConsecutiveFails) {
+    autoStatusEl.textContent = '🔍 Procurando carta...';
+    return;
+  }
+  // Muitas tentativas automáticas seguidas sem sucesso: pausa o loop em vez de
+  // continuar gastando CPU/rede, e entrega o controle para o botão manual.
+  autoScanPausedForManual = true;
+  autoStatusEl.innerHTML = '😕 Não conseguimos ler automaticamente.<br>Ajuste a luz/foco e toque em <strong>Capturar</strong>, ou toque em 🔄 Auto para tentar de novo.';
 }
 
 async function handleReading(reading) {

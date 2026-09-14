@@ -408,3 +408,131 @@ usa o OCR local (Tesseract corrigido) em vez da leitura por visão — mais
 limitado (só nome e número), mas funcional. Todos os outros serviços
 (TCGdex, câmbio, tradução automática) são gratuitos e sem chave, já
 funcionando sem nenhuma configuração adicional.
+
+## 8. Deploy e o pedido de "configurar o scanner de verdade"
+
+Entre o fim da sessão anterior e esta mensagem, o usuário commitou e deu
+push em todas as mudanças diretamente (commit `77bdee6 "teste"`, na branch
+`main`, já sincronizado com `origin/main`) — confirmado com
+`git log`/`git diff origin/main HEAD` (diff vazio). Conferi por amostragem
+que os arquivos no commit já incluem as correções feitas durante os testes
+(seção 5.2): `FINISH_PREFERENCE` em `pricing.js`, `getCardEnriched` em
+`tcgdex.js`, a checagem de `ANTHROPIC_API_KEY` na function. Ou seja: o código
+já publicado (ou publicando, dependendo de o site estar configurado para
+deploy contínuo a partir do GitHub) é a versão corrigida, não a antiga
+baseada em Tesseract quebrado.
+
+O usuário então perguntou o que precisa "colocar" para o scanner
+identificar a carta e já puxar os valores, dizendo que "tirando foto não
+está funcionando". Isso bate exatamente com a limitação documentada na
+seção 7: sem `ANTHROPIC_API_KEY` configurada no Netlify, a function
+`identify-card` responde `503 NO_API_KEY` e o app cai automaticamente para o
+OCR local — que lê só nome e número (quando lê), nunca set/raridade/variante,
+e é justamente o comportamento "não funciona direito" que o usuário está
+descrevendo. A resposta dada foi o passo a passo de onde conseguir a chave
+(console.anthropic.com) e onde colocá-la (Netlify → Site configuration →
+Environment variables → `ANTHROPIC_API_KEY` → novo deploy), com o aviso de
+que cada leitura tem um custo pequeno (chamada ao Claude Opus 5 com imagem),
+já que isso não estava explícito antes e o usuário deveria saber que passa a
+existir um custo variável por escaneamento assim que a chave for
+configurada.
+
+## 9. "Escanear, não tirar foto" — detecção automática e contínua
+
+O usuário perguntou se dava para identificar a carta sem configurar a chave
+da Anthropic. Expliquei que a única forma 100% gratuita e sem chave é o
+leitor local (Tesseract, já corrigido) ou a busca manual — não existe uma
+terceira via mágica, porque uma carta física não tem chip nem código de
+barras: qualquer identificação por software depende de capturar uma imagem
+dela e analisá-la, seja qual for a ferramenta por trás.
+
+Perguntei então o que ele imaginava por "escanear" em vez de "tirar foto", e
+a resposta foi: detecção automática e contínua — apontar a câmera e o app
+reconhecer sozinho, sem apertar botão, como um leitor de código de barras.
+
+### O que foi implementado
+
+- **`deploy/js/scanner.js`**: três funções de análise de frame, deliberadamente
+  baratas (rodam sobre uma imagem 40×40 a cada ~220ms):
+  - `grabTinyGray()` — reduz o frame atual da câmera a escala de cinza pequena.
+  - `frameDiff()` — diferença média entre dois frames pequenos (mede se a
+    câmera está parada).
+  - `frameSharpness()` — energia de borda aproximada (mede se está em foco).
+  - `AUTO_SCAN_THRESHOLDS` — limiares nomeados e comentados (estabilidade,
+    nitidez, verificações seguidas necessárias, tempo mínimo entre tentativas
+    reais, número de falhas seguidas antes de pausar).
+- **`deploy/js/app.js`**: um `setInterval` (`autoScanTick`) que só dispara uma
+  leitura de verdade (OCR local ou visão) quando a câmera está parada e
+  nítida por `stableChecksNeeded` verificações seguidas, respeitando um
+  cooldown mínimo entre tentativas e um teto de falhas consecutivas (depois
+  disso, pausa e pede ação manual em vez de continuar gastando CPU/rede
+  indefinidamente). Um botão "🔄 Auto" no cabeçalho do scanner liga/desliga
+  esse modo; o botão "Capturar" continua funcionando a qualquer momento como
+  disparo manual imediato.
+- **`deploy/index.html`**: texto da tela mudou de "toque em Capturar" para
+  "a detecção é automática", com uma linha de status ao vivo (`#auto-status`)
+  informando o que está acontecendo ("Procurando carta...",
+  "Mantendo o foco...", "Lendo...").
+
+**Sobre os limiares de `AUTO_SCAN_THRESHOLDS`:** foram escolhidos por
+raciocínio (o que costuma indicar uma imagem parada/nítida em termos de
+diferença de pixel e energia de borda), não calibrados contra uma câmera
+física — este ambiente de desenvolvimento não tem acesso a uma câmera real.
+Documentado explicitamente no código como ponto a ajustar depois de uso real
+em celular.
+
+### Como foi testado sem uma câmera física
+
+O Chromium do Playwright aceita `--use-fake-device-for-media-stream`, que
+alimenta `getUserMedia` com um vídeo sintético (um padrão colorido em
+movimento) em vez de pedir uma câmera real. Isso permitiu confirmar, com o
+navegador de verdade:
+
+- A câmera abre e o `<video>` recebe stream (1920×1080) sem cair no aviso de
+  "câmera não disponível".
+- O loop de verificação roda de fato: o texto de `#auto-status` muda sozinho
+  ao longo do tempo (confirma que `autoScanTick` está sendo chamado e
+  reagindo ao conteúdo do vídeo).
+- O botão "🔄 Auto" alterna corretamente para "⏸ Manual" (parando o loop, e
+  limpando o texto de status) e de volta para "🔄 Auto" (reiniciando o loop).
+- Fechar o modal (`✕`) realmente encerra o `setInterval` (confirmado
+  indiretamente: nenhum erro nem leitura fantasma depois de fechado).
+
+O padrão sintético do Chromium nunca vai gerar uma leitura "bem-sucedida" de
+verdade (não é uma carta), então esse teste não prova qualidade de
+reconhecimento — só prova que o mecanismo (loop, limiares, transições de
+estado, start/stop) funciona sem travar ou vazar timers. Qualidade real de
+detecção só se valida em uso com celular e carta física.
+
+### Bugs encontrados e corrigidos durante esse teste
+
+1. **Botão "tentar de novo" desligava o modo automático em vez de retomá-lo.**
+   Depois de `maxConsecutiveFails` tentativas sem sucesso, o loop se pausa
+   sozinho (`autoScanPausedForManual = true`) mas a preferência do usuário
+   (`autoScanEnabled`) continua `true`. O texto de aviso manda tocar em
+   "🔄 Auto" para tentar de novo, mas o handler do botão só invertia
+   `autoScanEnabled` — como já era `true`, o clique desligava o modo em vez
+   de retomá-lo. **Fix:** o handler agora trata o caso de pausa
+   separadamente, sempre retomando (nunca desligando) quando pausado.
+2. **Falha do lado do servidor travava o usuário sem alternativa.** Rodando
+   contra o `netlify dev` local (que não conseguia carregar a function por
+   causa da versão do Node — ver seção 5), uma tentativa de captura manual
+   revelou que `identifyCard()` só caía para o OCR local quando o erro tinha
+   código `NO_API_KEY` ou `NETWORK` — qualquer outro erro do lado do servidor
+   (ex.: resposta 5xx genérica, timeout do lado da Anthropic, recusa do
+   modelo) era relançado e travava o fluxo, direto contrariando a regra de
+   nunca deixar o usuário sem saída. **Fix:** `identifyCard()` agora cai para
+   o OCR local em qualquer falha que não seja o cancelamento explícito do
+   próprio usuário (`ABORTED`). Confirmado depois do fix: o overlay de
+   carregamento passou a ficar visível de forma contínua durante toda a
+   transição visão→OCR local, em vez de sumir e reaparecer.
+
+Também foi criado nesta etapa um arquivo `claude.md` na raiz do projeto
+(pelo usuário, fora desta sessão) com regras permanentes do projeto — leitura
+obrigatória antes de qualquer alteração, proibição de recriar o projeto do
+zero ou duplicar arquitetura, preservação de funcionalidades não relacionadas
+à tarefa, e proibição de inventar dados/preços/APIs. Essas regras já
+descrevem a forma como este trabalho vinha sendo conduzido (extensão do
+código existente, preços reais com "Preço não encontrado" quando ausentes),
+e passam a valer explicitamente para qualquer trabalho futuro neste
+repositório.
