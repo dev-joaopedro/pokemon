@@ -7,9 +7,11 @@ import { CURRENCIES, DEFAULT_CURRENCY, getCardPrice, listPricedVariants, formatM
 import * as Collection from './collection.js';
 import { getCardInLanguage } from './translate.js';
 import {
-  identifyCard, startCamera, stopCamera, captureFrame, loadImageFile, PROBLEM_MESSAGES,
-  grabTinyGray, frameDiff, frameSharpness, AUTO_SCAN_THRESHOLDS,
+  identifyCard, identifyViaOcr, startCamera, stopCamera, captureFrame, loadImageFile, loadImageUrl,
+  PROBLEM_MESSAGES, grabTinyGray, frameSharpness, AUTO_SCAN_THRESHOLDS,
+  loadOpenCv, detectCardQuad, warpCardPerspective, scaleQuadPoints, quadsAreStable, grayscale32,
 } from './scanner.js';
+import { matchCardImage, learnCard } from './phash-db.js';
 
 /* ═══════════════════════════ Estado global ═══════════════════════════ */
 
@@ -206,6 +208,7 @@ function candidateHtml(card) {
 
 const scanModal = $('#scan-modal');
 const camVideo = $('#camera-video');
+const contourCanvas = $('#contour-canvas');
 const ocrOverlay = $('#ocr-overlay');
 const ocrMsg = $('#ocr-msg');
 const noCamNotice = $('#no-camera-notice');
@@ -218,12 +221,18 @@ const toggleAutoBtn = $('#toggle-auto');
 
 let autoScanEnabled = true; // preferência do usuário nesta sessão (chip "Auto")
 let autoScanTimer = null;
-let autoScanBusy = false; // uma leitura real (OCR/visão) está em andamento
-let autoScanLastGray = null;
-let autoScanStableCount = 0;
+let autoScanBusy = false; // uma leitura real (OCR/pHash) está em andamento
 let autoScanFails = 0;
 let autoScanLastAttemptAt = 0;
 let autoScanPausedForManual = false; // pausado após muitas falhas seguidas
+
+let cvReady = false;
+let cvLoadFailed = false;
+let lastQuadDetection = null; // { points, areaFraction }, coordenadas do canvas de detecção
+let stableStreak = 0;
+let detectCanvasEl = null;
+let lastWarpedCanvas = null; // reaproveitado pelo botão "Capturar" se muito recente
+let lastWarpedAt = 0;
 
 async function openScanner() {
   scanModal.classList.add('open');
@@ -237,6 +246,14 @@ async function openScanner() {
   scanHintEl.innerHTML = 'Aponte a câmera para a carta<br>a detecção é automática';
   autoStatusEl.textContent = '';
   resetAutoScanState();
+  clearContourOverlay();
+
+  loadOpenCv((msg) => { if (!cvReady) autoStatusEl.textContent = msg; })
+    .then(() => { cvReady = true; })
+    .catch(() => {
+      cvLoadFailed = true;
+      autoStatusEl.textContent = '⚠️ Detecção automática indisponível nesta rede. Use "Capturar".';
+    });
 
   try {
     state.camStream = await startCamera(camVideo);
@@ -257,13 +274,17 @@ function closeScanner() {
   if (state.camStream) { stopCamera(state.camStream); state.camStream = null; }
   camVideo.srcObject = null;
   ocrOverlay.classList.remove('show');
+  clearContourOverlay();
 }
 
 $('#close-scan').addEventListener('click', closeScanner);
 
 captureBtn.addEventListener('click', () => {
   if (!camVideo.videoWidth) return;
-  handleCapturedCanvas(captureFrame(camVideo), { silent: false });
+  // Se um recorte já endireitado (warp) de menos de 1.5s atrás está disponível,
+  // usa ele — é um enquadramento melhor que o frame cru para OCR/visão.
+  const fresh = lastWarpedCanvas && Date.now() - lastWarpedAt < 1500;
+  handleCapturedCanvas(fresh ? lastWarpedCanvas : captureFrame(camVideo), { silent: false });
 });
 
 toggleAutoBtn.addEventListener('click', () => {
@@ -313,18 +334,21 @@ fileInput.addEventListener('change', async (e) => {
 });
 
 /* ── Loop de detecção automática ──────────────────────────────────────────
- * A cada AUTO_SCAN_THRESHOLDS.checkIntervalMs, compara um frame reduzido com
- * o anterior. Só dispara uma leitura de verdade (cara — CPU do OCR local ou
- * uma chamada de rede à visão) quando a câmera está parada e em foco por
- * algumas verificações seguidas. Isso é o que faz a experiência parecer um
- * scanner de código de barras em vez de "tirar foto e esperar".
+ * A cada AUTO_SCAN_THRESHOLDS.checkIntervalMs, roda a detecção de contorno
+ * (OpenCV.js) sobre um frame reduzido e desenha o quadrilátero encontrado no
+ * overlay em tempo real. Só dispara uma leitura de verdade (OCR local, com
+ * fallback de pHash) quando esse contorno fica parado por algumas
+ * verificações seguidas. Isso é o que faz a experiência parecer um scanner
+ * de código de barras em vez de "tirar foto e esperar".
  */
 function resetAutoScanState() {
-  autoScanLastGray = null;
-  autoScanStableCount = 0;
+  lastQuadDetection = null;
+  stableStreak = 0;
   autoScanFails = 0;
   autoScanLastAttemptAt = 0;
   autoScanPausedForManual = false;
+  lastWarpedCanvas = null;
+  lastWarpedAt = 0;
 }
 
 function startAutoScan() {
@@ -337,32 +361,227 @@ function stopAutoScan() {
   if (autoScanTimer) { clearInterval(autoScanTimer); autoScanTimer = null; }
 }
 
+function getDetectCanvas() {
+  if (!detectCanvasEl) detectCanvasEl = document.createElement('canvas');
+  return detectCanvasEl;
+}
+
+function drawVideoToCanvas(video, canvas, maxDim) {
+  const scale = maxDim / Math.max(video.videoWidth, video.videoHeight);
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+}
+
+function clearContourOverlay() {
+  if (!contourCanvas) return;
+  contourCanvas.getContext('2d').clearRect(0, 0, contourCanvas.width, contourCanvas.height);
+}
+
+/** Mapeia o retângulo do vídeo (resolução intrínseca) para a caixa exibida, respeitando object-fit:cover. */
+function videoDisplayRect() {
+  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+  const cw = camVideo.clientWidth, ch = camVideo.clientHeight;
+  if (!vw || !vh || !cw || !ch) return null;
+  const videoRatio = vw / vh, boxRatio = cw / ch;
+  let drawW, drawH, offX, offY;
+  if (videoRatio > boxRatio) {
+    drawH = ch; drawW = ch * videoRatio; offX = (cw - drawW) / 2; offY = 0;
+  } else {
+    drawW = cw; drawH = cw / videoRatio; offX = 0; offY = (ch - drawH) / 2;
+  }
+  return { vw, vh, drawW, drawH, offX, offY };
+}
+
+function drawContourOverlay(quad, detectCanvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = camVideo.clientWidth, h = camVideo.clientHeight;
+  if (contourCanvas.width !== Math.round(w * dpr) || contourCanvas.height !== Math.round(h * dpr)) {
+    contourCanvas.width = Math.round(w * dpr);
+    contourCanvas.height = Math.round(h * dpr);
+  }
+  const ctx = contourCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  if (!quad) return;
+
+  const rect = videoDisplayRect();
+  if (!rect) return;
+
+  const pts = quad.points.map((p) => ({
+    x: rect.offX + (p.x / detectCanvas.width) * rect.drawW,
+    y: rect.offY + (p.y / detectCanvas.height) * rect.drawH,
+  }));
+
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.closePath();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = stableStreak >= AUTO_SCAN_THRESHOLDS.stableFramesNeeded ? '#4ade80' : '#f7c948';
+  ctx.stroke();
+}
+
 function autoScanTick() {
   if (autoScanBusy || autoScanPausedForManual || !camVideo.videoWidth) return;
 
-  const gray = grabTinyGray(camVideo);
-  const diff = frameDiff(autoScanLastGray, gray);
-  const sharp = frameSharpness(gray);
-  autoScanLastGray = gray;
-
-  const isStable = diff < AUTO_SCAN_THRESHOLDS.stabilityMaxDiff;
-  const isSharp = sharp > AUTO_SCAN_THRESHOLDS.sharpnessMin;
-
-  if (isStable && isSharp) {
-    autoScanStableCount++;
-    autoStatusEl.textContent = autoScanStableCount >= AUTO_SCAN_THRESHOLDS.stableChecksNeeded
-      ? '✨ Lendo...'
-      : '📌 Mantendo o foco...';
-  } else {
-    autoScanStableCount = 0;
-    autoStatusEl.textContent = isSharp ? '🔍 Aproxime e segure firme...' : '🔍 Ajuste o foco...';
+  if (!cvReady) {
+    autoStatusEl.textContent = cvLoadFailed
+      ? '⚠️ Detecção automática indisponível. Use "Capturar".'
+      : '⏳ Carregando detector de contorno...';
+    return;
   }
 
+  const detectCanvas = getDetectCanvas();
+  drawVideoToCanvas(camVideo, detectCanvas, AUTO_SCAN_THRESHOLDS.detectMaxDim);
+
+  let quad = null;
+  try {
+    quad = detectCardQuad(window.cv, detectCanvas);
+  } catch {
+    quad = null;
+  }
+
+  if (!quad || quad.areaFraction < AUTO_SCAN_THRESHOLDS.minQuadAreaFraction) {
+    lastQuadDetection = null;
+    stableStreak = 0;
+    drawContourOverlay(null, detectCanvas);
+    autoStatusEl.textContent = '🔍 Procurando carta...';
+    return;
+  }
+
+  const stable = quadsAreStable(
+    lastQuadDetection, quad, Math.max(detectCanvas.width, detectCanvas.height), AUTO_SCAN_THRESHOLDS,
+  );
+  stableStreak = stable ? stableStreak + 1 : 1;
+  lastQuadDetection = quad;
+
+  drawContourOverlay(quad, detectCanvas);
+  autoStatusEl.textContent = stableStreak >= AUTO_SCAN_THRESHOLDS.stableFramesNeeded
+    ? '✨ Lendo...'
+    : '📌 Mantendo o foco...';
+
   const cooldownElapsed = Date.now() - autoScanLastAttemptAt > AUTO_SCAN_THRESHOLDS.attemptCooldownMs;
-  if (autoScanStableCount >= AUTO_SCAN_THRESHOLDS.stableChecksNeeded && cooldownElapsed) {
-    autoScanStableCount = 0;
+  if (stableStreak >= AUTO_SCAN_THRESHOLDS.stableFramesNeeded && cooldownElapsed) {
+    stableStreak = 0;
     autoScanLastAttemptAt = Date.now();
-    handleCapturedCanvas(captureFrame(camVideo), { silent: true });
+    runAutoIdentify(quad, detectCanvas);
+  }
+}
+
+/**
+ * Dispara quando o contorno da carta fica estável: endireita a carta (warp
+ * de perspectiva) a partir do frame em resolução plena, tenta OCR local
+ * sobre esse recorte (fast path) e, se não der certo, cai para pHash contra
+ * o banco de imagens conhecidas (fallback). Nunca chama a visão paga (Claude)
+ * automaticamente — isso só acontece no botão manual "Capturar", uma ação
+ * deliberada do usuário.
+ */
+async function runAutoIdentify(quad, detectCanvas) {
+  autoScanBusy = true;
+  try {
+    const fullFrame = captureFrame(camVideo);
+    const sx = fullFrame.width / detectCanvas.width;
+    const sy = fullFrame.height / detectCanvas.height;
+    const fullQuad = scaleQuadPoints(quad.points, sx, sy);
+
+    let warped;
+    try {
+      warped = warpCardPerspective(
+        window.cv, fullFrame, fullQuad, AUTO_SCAN_THRESHOLDS.warpWidth, AUTO_SCAN_THRESHOLDS.warpHeight,
+      );
+    } catch {
+      registerAutoScanFailure();
+      return;
+    }
+    lastWarpedCanvas = warped;
+    lastWarpedAt = Date.now();
+
+    const sharp = frameSharpness(grabTinyGray(warped, 40));
+    if (sharp < AUTO_SCAN_THRESHOLDS.sharpnessMin) {
+      autoStatusEl.textContent = '🔍 Aproxime e segure firme...';
+      registerAutoScanFailure();
+      return;
+    }
+
+    autoStatusEl.textContent = '🔤 Lendo código da carta...';
+    let reading = null;
+    try {
+      reading = await identifyViaOcr(warped, { onProgress: (m) => { autoStatusEl.textContent = m; } });
+    } catch {
+      reading = null;
+    }
+
+    if (reading && (reading.name || reading.number)) {
+      stopAutoScan();
+      closeScanner();
+      await handleReading(reading);
+      return;
+    }
+
+    autoStatusEl.textContent = '🧬 Comparando imagem com o banco de cartas...';
+    const gray = grayscale32(warped);
+    const matches = await matchCardImage(gray, { maxDistance: AUTO_SCAN_THRESHOLDS.phashMaxDistance, limit: 3 });
+    const best = matches[0];
+
+    if (best) {
+      const card = await getCard(best.id, state.lang).catch(() => null);
+      if (card) {
+        stopAutoScan();
+        closeScanner();
+        await handleDirectMatch(card, {
+          name: card.name || '',
+          number: card.localId ? String(card.localId) : '',
+          setTotal: '', setName: '', setCode: '', language: '', rarityText: '',
+          variantHints: [], illustrator: '', year: '', hp: '',
+          confidence: 0.55, readable: true, problem: '', source: 'phash',
+        });
+        return;
+      }
+    }
+
+    registerAutoScanFailure();
+  } finally {
+    autoScanBusy = false;
+  }
+}
+
+/** Mostra a tela de confirmação direto para uma carta já identificada por id (pHash) — sem busca por nome/número. */
+async function handleDirectMatch(card, reading) {
+  showView('confirm');
+  state.candidates = [card];
+  state.currentReading = reading;
+  $('#confirm-read-summary').innerHTML =
+    '<div class="read-summary">🧬 Encontramos uma carta parecida pela imagem — confira se é a sua:</div>';
+  $('#confirm-status').textContent = '1 carta encontrada por correspondência de imagem:';
+  $('#confirm-list').innerHTML = candidateHtml(card);
+  $$('#confirm-list .candidate').forEach((el) => {
+    el.addEventListener('click', async () => {
+      await loadCardDetail(card.id, { reading });
+      showView('detail');
+    });
+  });
+}
+
+/**
+ * Alimenta o cache local de pHash (IndexedDB, dentro do worker) com o hash
+ * da imagem OFICIAL da carta — nunca da foto tirada pela câmera. Roda em
+ * segundo plano, sem bloquear a tela de detalhe, toda vez que uma carta é
+ * exibida: é assim que o banco de correspondência por imagem cresce com o
+ * uso real do app, sem depender só do script offline de pré-cálculo.
+ */
+async function learnCardHashInBackground(card) {
+  try {
+    const url = cardImage(card, 'low');
+    if (!url) return;
+    const img = await loadImageUrl(url);
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth || img.width;
+    c.height = img.naturalHeight || img.height;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const gray = grayscale32(c);
+    await learnCard(gray, { id: card.id, name: card.name || '', number: card.localId ? String(card.localId) : '', setId: card.set?.id || '' });
+  } catch {
+    /* aprendizado é best-effort — nunca deve afetar a experiência principal. */
   }
 }
 
@@ -504,6 +723,7 @@ async function loadCardDetail(cardId, { reading = null, fromCollectionItem = nul
     state.currentCard = card;
     state.currentReading = reading;
     renderDetail(card, { reading, fromCollectionItem });
+    learnCardHashInBackground(card);
 
     // O ano de lançamento não vem no resumo de set embutido no card — busca
     // à parte e preenche assim que chegar, sem atrasar o resto da tela.

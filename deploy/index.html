@@ -332,8 +332,12 @@
   .auto-toggle-btn.active { background: rgba(247,201,72,.18); border-color: var(--gold); color: var(--gold); }
   #camera-wrap { flex: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000; }
   #camera-video { width: 100%; height: 100%; object-fit: cover; }
-  #scan-overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  #scan-box { width: 62%; aspect-ratio: 2.5 / 3.5; border: 2.5px solid var(--gold); border-radius: 12px; position: relative; box-shadow: 0 0 0 9999px rgba(0,0,0,.52); }
+  #contour-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 6; }
+  #scan-overlay { position: absolute; inset: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 4; }
+  /* Guia sutil (a carta pode ser detectada em qualquer posição do quadro — o
+     contorno dinâmico em #contour-canvas é o feedback real; esta caixa é só
+     uma referência inicial de enquadramento, por isso a vinheta é leve). */
+  #scan-box { width: 62%; aspect-ratio: 2.5 / 3.5; border: 2.5px dashed rgba(247,201,72,.5); border-radius: 12px; position: relative; box-shadow: 0 0 0 9999px rgba(0,0,0,.28); }
   #scan-box::before, #scan-box::after { content: ''; position: absolute; width: 22px; height: 22px; border-color: var(--gold); border-style: solid; }
   #scan-box::before { top: -2px; left: -2px; border-width: 3px 0 0 3px; border-radius: 5px 0 0 0; }
   #scan-box::after { bottom: -2px; right: -2px; border-width: 0 3px 3px 0; border-radius: 0 0 5px 0; }
@@ -464,6 +468,7 @@
   </div>
   <div id="camera-wrap">
     <video id="camera-video" autoplay playsinline muted></video>
+    <canvas id="contour-canvas"></canvas>
     <div id="scan-overlay">
       <div id="scan-box"><div id="scan-line"></div></div>
       <p id="scan-hint">Aponte a câmera para a carta<br>a detecção é automática</p>
@@ -487,6 +492,6 @@
   </div>
 </div>
 
-<script type="module" src="js/app.js?v=2"></script>
+<script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>

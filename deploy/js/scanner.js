@@ -230,22 +230,18 @@ export function captureFrame(videoEl) {
  * Uma carta não tem chip nem código de barras — "escanear" uma carta física
  * só pode significar capturar uma imagem dela e analisá-la. O que dá a
  * sensação de "scanner" em vez de "foto" é não precisar apertar um botão: o
- * app olha o vídeo continuamente e só dispara uma leitura de verdade (OCR ou
- * visão) quando o frame está parado e nítido — sem isso, cada tremida de mão
- * geraria uma tentativa de leitura cara e inútil.
+ * app acompanha o contorno da carta em tempo real (OpenCV.js) e só dispara
+ * uma leitura de verdade (OCR local, com fallback de pHash) quando esse
+ * contorno fica parado por alguns frames seguidos — sem isso, cada tremida
+ * de mão geraria uma tentativa de leitura cara e inútil.
  *
- * As funções abaixo são deliberadamente baratas (rodam a cada ~200ms sobre
- * uma imagem 40×40) para servirem de "vale a pena tentar ler agora?" antes de
- * qualquer chamada de OCR/visão de verdade.
- *
- * Os limiares (THRESHOLDS) foram escolhidos por raciocínio, não calibrados
- * contra uma câmera real — este ambiente de desenvolvimento não tem acesso a
- * uma câmera física para medir valores reais de nitidez/estabilidade. Ajuste-
- * os se, em uso real, o app disparar leituras cedo demais (baixe
- * SHARPNESS_MIN) ou tarde demais (suba os dois, com cautela).
+ * Os limiares (AUTO_SCAN_THRESHOLDS) foram escolhidos por raciocínio, não
+ * calibrados contra uma câmera real — este ambiente de desenvolvimento não
+ * tem acesso a uma câmera física. Ajuste-os se, em uso real, o app disparar
+ * leituras cedo demais ou tarde demais.
  */
 
-/** Frame reduzido em tons de cinza — barato o bastante para rodar a cada verificação. */
+/** Frame reduzido em tons de cinza — usado como verificação barata de nitidez. */
 export function grabTinyGray(source, size = 40) {
   const c = document.createElement('canvas');
   c.width = size;
@@ -259,14 +255,6 @@ export function grabTinyGray(source, size = 40) {
     gray[i] = data[o] * 0.299 + data[o + 1] * 0.587 + data[o + 2] * 0.114;
   }
   return gray;
-}
-
-/** Diferença média entre dois frames pequenos — alto = câmera ainda em movimento. */
-export function frameDiff(a, b) {
-  if (!a || !b || a.length !== b.length) return Infinity;
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
-  return sum / a.length;
 }
 
 /** Energia de borda aproximada — baixo valor indica imagem fora de foco. */
@@ -286,19 +274,213 @@ export function frameSharpness(gray, size = 40) {
 }
 
 export const AUTO_SCAN_THRESHOLDS = {
-  /** Abaixo disso, consideramos a câmera "parada" (frames quase idênticos). */
-  stabilityMaxDiff: 6,
-  /** Acima disso, consideramos a imagem "em foco" o bastante para tentar ler. */
-  sharpnessMin: 900,
-  /** Verificações estáveis seguidas exigidas antes de disparar uma leitura real. */
-  stableChecksNeeded: 3,
-  /** Intervalo entre verificações leves (estabilidade/nitidez). */
-  checkIntervalMs: 220,
-  /** Tempo mínimo entre duas tentativas de leitura de verdade (OCR/visão). */
-  attemptCooldownMs: 2200,
+  /** Intervalo entre tentativas de detecção de contorno (pedido: 300-500ms). */
+  checkIntervalMs: 400,
+  /** Maior lado do frame reduzido usado na detecção de contorno (custo de OpenCV). */
+  detectMaxDim: 320,
+  /** Contorno precisa ocupar ao menos essa fração da área do frame reduzido p/ ser considerado a carta. */
+  minQuadAreaFraction: 0.15,
+  /** Detecções consecutivas "paradas" exigidas antes de identificar a carta. */
+  stableFramesNeeded: 4,
+  /** Deslocamento máx. do centro do contorno (fração da maior dimensão do frame) entre checagens p/ considerar "parado". */
+  centroidEpsFraction: 0.025,
+  /** Variação máx. de área do contorno entre checagens p/ considerar "parado". */
+  areaRatioEpsFraction: 0.12,
+  /** Tamanho do recorte endireitado (warp de perspectiva) usado para OCR/pHash. */
+  warpWidth: 300,
+  warpHeight: 420,
+  /** Nitidez mínima do recorte já endireitado, abaixo disso não vale a pena tentar ler. */
+  sharpnessMin: 450,
+  /** Tempo mínimo entre duas identificações completas (OCR local + pHash). */
+  attemptCooldownMs: 1800,
   /** Tentativas reais seguidas sem sucesso antes de pausar e pedir ação manual. */
   maxConsecutiveFails: 6,
+  /** Distância de Hamming máxima (de 64 bits) para aceitar um candidato de pHash. */
+  phashMaxDistance: 10,
 };
+
+/* ═══════════════════════ OpenCV.js: contorno + warp de perspectiva ═══════════════════════
+ *
+ * Carregado sob demanda (só quando o scanner abre), como o Tesseract.js —
+ * são ~10MB de WASM, não faz sentido puxar isso no carregamento inicial do
+ * app. Build oficial do próprio projeto OpenCV (docs.opencv.org), a mesma
+ * usada nos tutoriais de opencv.js.
+ */
+
+let opencvLoading = null;
+
+export function loadOpenCv(onProgress) {
+  if (window.cv?.Mat) return Promise.resolve();
+  if (opencvLoading) return opencvLoading;
+
+  onProgress?.('Carregando detector de contorno (primeira vez)...');
+  opencvLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://docs.opencv.org/4.9.0/opencv.js';
+    s.onerror = () => {
+      opencvLoading = null;
+      reject(new AppError('NETWORK', 'Falha ao carregar o detector de contorno.'));
+    };
+    s.onload = () => {
+      if (window.cv?.Mat) {
+        resolve();
+      } else if (window.cv) {
+        window.cv['onRuntimeInitialized'] = resolve;
+      } else {
+        opencvLoading = null;
+        reject(new AppError('NETWORK', 'Detector de contorno indisponível.'));
+      }
+    };
+    document.head.appendChild(s);
+  });
+  return opencvLoading;
+}
+
+/** Ordena 4 pontos quaisquer como [topo-esq, topo-dir, baixo-dir, baixo-esq]. */
+export function orderQuadPoints(pts) {
+  const bySum = [...pts].sort((a, b) => a.x + a.y - (b.x + b.y));
+  const tl = bySum[0];
+  const br = bySum[3];
+  const byDiff = [...pts].sort((a, b) => a.x - a.y - (b.x - b.y));
+  const bl = byDiff[0];
+  const tr = byDiff[3];
+  return [tl, tr, br, bl];
+}
+
+/**
+ * Detecta o maior contorno quadrilátero convexo num canvas (bordas via Canny
+ * + approxPolyDP). Devolve `{ points, areaFraction }` no sistema de
+ * coordenadas do próprio canvas, ou `null` se nenhum quadrilátero plausível
+ * foi encontrado.
+ */
+export function detectCardQuad(cv, canvas) {
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const blurred = new cv.Mat();
+  const edges = new cv.Mat();
+  const dilated = new cv.Mat();
+  const contours = new cv.MatVector();
+  const hierarchy = new cv.Mat();
+  const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+
+  try {
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    cv.Canny(blurred, edges, 50, 150);
+    cv.dilate(edges, dilated, kernel);
+    cv.findContours(dilated, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+    const frameArea = canvas.width * canvas.height;
+    let best = null;
+    let bestArea = 0;
+
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const peri = cv.arcLength(cnt, true);
+      const approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+
+      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+        const area = Math.abs(cv.contourArea(approx));
+        if (area > bestArea && area / frameArea > 0.05) {
+          bestArea = area;
+          const pts = [];
+          for (let p = 0; p < 4; p++) {
+            pts.push({ x: approx.data32S[p * 2], y: approx.data32S[p * 2 + 1] });
+          }
+          best = pts;
+        }
+      }
+      approx.delete();
+      cnt.delete();
+    }
+
+    return best ? { points: orderQuadPoints(best), areaFraction: bestArea / frameArea } : null;
+  } finally {
+    src.delete();
+    gray.delete();
+    blurred.delete();
+    edges.delete();
+    dilated.delete();
+    contours.delete();
+    hierarchy.delete();
+    kernel.delete();
+  }
+}
+
+/** Reposiciona os 4 pontos de um quad de um sistema de coordenadas para outro (mesma proporção). */
+export function scaleQuadPoints(points, sx, sy) {
+  return points.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+}
+
+function quadCentroid(points) {
+  const x = points.reduce((s, p) => s + p.x, 0) / points.length;
+  const y = points.reduce((s, p) => s + p.y, 0) / points.length;
+  return { x, y };
+}
+
+/** Dois quads consecutivos estão "parados" o bastante para valer a pena identificar a carta? */
+export function quadsAreStable(prev, curr, frameMaxDim, { centroidEpsFraction, areaRatioEpsFraction }) {
+  if (!prev || !curr) return false;
+  const a = quadCentroid(prev.points);
+  const b = quadCentroid(curr.points);
+  const centroidDist = Math.hypot(a.x - b.x, a.y - b.y);
+  if (centroidDist / frameMaxDim > centroidEpsFraction) return false;
+  const ratio = prev.areaFraction > 0 ? curr.areaFraction / prev.areaFraction : 0;
+  return ratio > 1 - areaRatioEpsFraction && ratio < 1 + areaRatioEpsFraction;
+}
+
+/** Aplica o warp de perspectiva: endireita o quadrilátero detectado num retângulo outW x outH. */
+export function warpCardPerspective(cv, sourceCanvas, quadPoints, outW, outH) {
+  const src = cv.imread(sourceCanvas);
+  const dst = new cv.Mat();
+  const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, quadPoints.flatMap((p) => [p.x, p.y]));
+  const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
+  const M = cv.getPerspectiveTransform(srcTri, dstTri);
+
+  try {
+    cv.warpPerspective(src, dst, M, new cv.Size(outW, outH));
+    const outCanvas = document.createElement('canvas');
+    outCanvas.width = outW;
+    outCanvas.height = outH;
+    cv.imshow(outCanvas, dst);
+    return outCanvas;
+  } finally {
+    src.delete();
+    dst.delete();
+    srcTri.delete();
+    dstTri.delete();
+    M.delete();
+  }
+}
+
+/** Reduz um canvas/imagem/vídeo a uma grade 32x32 em tons de cinza — entrada do pHash. */
+export function grayscale32(source) {
+  const size = 32;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(source, 0, 0, size, size);
+  const { data } = ctx.getImageData(0, 0, size, size);
+  const out = new Float64Array(size * size);
+  for (let i = 0; i < out.length; i++) {
+    const o = i * 4;
+    out[i] = data[o] * 0.299 + data[o + 1] * 0.587 + data[o + 2] * 0.114;
+  }
+  return out;
+}
+
+/** Carrega uma imagem por URL (com CORS anônimo — necessário p/ ler pixels de imagens da TCGdex). */
+export function loadImageUrl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new AppError('NETWORK', 'Falha ao carregar imagem da carta.'));
+    img.src = url;
+  });
+}
 
 export function loadImageFile(file) {
   return new Promise((resolve, reject) => {

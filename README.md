@@ -10,15 +10,23 @@ deploy/                     ← publicado no Netlify (netlify.toml: publish = "d
   index.html                ← shell da SPA (dashboard, scan, busca, detalhe, coleção)
   js/
     app.js                  ← orquestrador: estado, navegação, ligação dos módulos à UI
-    scanner.js              ← câmera + identificação (visão -> fallback OCR local)
+    scanner.js              ← câmera, contorno/warp (OpenCV.js) e identificação (visão/OCR)
+    phash.js                ← pHash (DCT) puro — compartilhado entre navegador e o script offline
+    phash-worker.js         ← Web Worker: calcula/compara pHash fora da thread de UI
+    phash-db.js             ← wrapper do worker de pHash usado pela UI
     tcgdex.js               ← cliente da API TCGdex (dados de cartas)
     pricing.js               ← preços (TCGdex) + câmbio (open.er-api.com)
     collection.js            ← coleção do usuário (localStorage)
     translate.js             ← tradução oficial (TCGdex) + automática (MyMemory)
     util.js                  ← fetch com timeout, pool de requisições, helpers
+  data/
+    card-hashes.json         ← banco de pHash pré-computado (gerado por tools/build-phash-db.mjs)
 
 netlify/functions/
   identify-card.mjs          ← única função server-side: visão do Claude sobre a foto da carta
+
+tools/
+  build-phash-db.mjs         ← script offline (Node) que gera deploy/data/card-hashes.json
 ```
 
 Não há build step nem framework — é HTML + ES modules servidos estaticamente,
@@ -37,6 +45,35 @@ chave secreta (identificação por visão).
 
 A camada de dados fica isolada em `js/tcgdex.js` e `js/pricing.js`: trocar de
 fonte no futuro significa reescrever esses dois arquivos, não o resto do app.
+
+## Scanner ao vivo (detecção automática de contorno)
+
+Enquanto o scanner está aberto, a cada ~400ms o app roda OpenCV.js sobre um
+frame reduzido da câmera para achar o contorno quadrilátero da carta,
+desenha esse contorno em tempo real sobre o vídeo e, quando ele fica parado
+por alguns frames seguidos, endireita a carta (warp de perspectiva) e tenta
+identificá-la em duas etapas, sem precisar apertar nenhum botão:
+
+1. **OCR local** (Tesseract.js) sobre o recorte já endireitado — grátis, roda
+   no aparelho.
+2. **pHash** (hash perceptual da imagem) contra um banco de cartas
+   conhecidas, comparado num Web Worker — usado só se o OCR não conseguir
+   ler nome nem número.
+
+O botão manual "Capturar" continua usando o caminho original (visão do
+Claude, com fallback para OCR) — a chamada paga só acontece nessa ação
+deliberada do usuário, nunca automaticamente durante o scan contínuo.
+
+### Banco de pHash
+
+`deploy/data/card-hashes.json` é o banco pré-computado, gerado por
+`npm run build:phash-db` (script `tools/build-phash-db.mjs`, requer internet
+e Node ≥ 20.10 — não foi possível rodá-lo no ambiente onde este recurso foi
+desenvolvido, então o arquivo começa vazio (`[]`) neste repositório; veja
+DEVLOG.md para o porquê). Independentemente do script, o app também aprende
+sozinho: toda vez que uma carta é exibida na tela de detalhe, o hash da sua
+imagem oficial (nunca da foto da câmera) é salvo num cache local
+(IndexedDB), então o banco cresce com o uso real mesmo sem rodar o script.
 
 ## Configuração no Netlify
 
@@ -73,3 +110,13 @@ outro segredo para gerenciar.
 - **Rate limit da função de visão:** é por instância de servidor (memória do
   processo), não um limite duro global — suficiente para conter abuso
   casual, mas não substitui um KV/Redis se o tráfego crescer.
+- **Banco de pHash vazio por padrão:** `deploy/data/card-hashes.json` começa
+  como `[]`. O fallback por imagem só funciona bem depois de rodar
+  `npm run build:phash-db` (uma vez, com internet) ou depois de algum uso
+  real do app (cada carta vista na tela de detalhe ensina seu próprio hash).
+  Sem nenhuma das duas coisas, o scan automático conta só com o OCR local.
+- **Limiares de contorno/estabilidade/nitidez não calibrados com câmera
+  real:** foram escolhidos por raciocínio (ver comentários em
+  `js/scanner.js`), sem acesso a uma câmera física neste ambiente de
+  desenvolvimento. Ajuste-os em `AUTO_SCAN_THRESHOLDS` depois de testar em
+  um celular de verdade.

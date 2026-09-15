@@ -536,3 +536,304 @@ descrevem a forma como este trabalho vinha sendo conduzido (extensão do
 código existente, preços reais com "Preço não encontrado" quando ausentes),
 e passam a valer explicitamente para qualquer trabalho futuro neste
 repositório.
+
+## 10. Scanner com detecção de contorno em tempo real (OpenCV.js + pHash)
+
+Pedido nesta sessão: evoluir o "escaneie sem clicar" (seção 9, baseado em
+diff de pixel + nitidez sobre o frame inteiro) para um scanner de verdade —
+contorno da carta detectado e desenhado ao vivo, perspectiva endireitada
+automaticamente, identificação em duas etapas (OCR local rápido, com
+fallback de pHash contra um banco de imagens conhecidas), tudo isso sem tirar
+o usuário do fluxo já existente (confirmação, detalhe, adicionar à coleção).
+
+### 10.1. Levantamento antes de mexer (regra 1 do `claude.md`)
+
+Antes de escrever qualquer código, li `scanner.js`, `app.js`, `tcgdex.js` e
+`index.html` por completo para entender o que já existia: a câmera
+(`startCamera`/`stopCamera`/`captureFrame`), a identificação em duas camadas
+já existente (visão do Claude via Netlify Function, com fallback para OCR
+Tesseract local — seções 1-2 deste arquivo) e o loop de auto-scan da seção 9
+(`grabTinyGray`/`frameDiff`/`frameSharpness` rodando a cada 220ms sobre o
+frame inteiro, sem nenhuma noção de "onde está a carta"). Ou seja: a
+identificação em duas etapas (visão → OCR) e o conceito de "loop de
+verificação leve antes de disparar uma leitura cara" já existiam — o que
+faltava era (a) saber *onde* a carta está no quadro (contorno real, não só
+"a imagem está parada"), (b) endireitar a perspectiva antes de ler, e (c) um
+terceiro nível de fallback por imagem (pHash) para quando nem OCR nem a
+visão automática (que deixou de ser chamada no loop silencioso, ver 10.3)
+resolvem.
+
+### 10.2. Restrição de ambiente descoberta ao testar: sem acesso à TCGdex
+
+O pedido original imaginava um "banco pré-computado de hashes... calculado
+offline, uma vez, a partir das URLs de imagem que a API já fornece". Antes de
+prometer isso, testei o acesso: `curl` para `api.tcgdex.net` e
+`assets.tcgdex.net` deu **timeout de conexão** (`curl: (28)`) neste ambiente,
+apesar de outros hosts (`google.com`, `registry.npmjs.org`,
+`cdn.jsdelivr.net`, `docs.opencv.org`) responderem normalmente — não é uma
+falta de internet genérica, é especificamente esses dois hosts da TCGdex que
+não são alcançáveis daqui (`nslookup` resolve o IP normalmente, a conexão
+TCP é que trava). Ou seja: **não dava para baixar as imagens de milhares de
+cartas para gerar um banco de hashes real nesta sessão** — e fabricar um
+arquivo de hashes fingindo que vieram de imagens reais violaria a regra 4 do
+`claude.md` (não inventar dados/IDs/APIs).
+
+Perguntei ao usuário como proceder (pergunta explícita, não decisão
+unilateral, já que isso muda o escopo/entregável) e a resposta escolhida foi:
+**script offline (para rodar com internet de verdade) + cache incremental no
+navegador**, não um banco fabricado nem a ausência total do recurso. É o que
+foi implementado — ver 10.5.
+
+### 10.3. Arquitetura escolhida: substituir o gatilho, não duplicar o pipeline
+
+Decisão central: a detecção de contorno (OpenCV) **substitui** o mecanismo de
+gatilho antigo (diff de pixel no frame inteiro) em vez de rodar ao lado dele
+— manter os dois seria exatamente a "segunda arquitetura paralela" proibida
+pela regra 2. `frameDiff()` foi removido de `scanner.js`; `grabTinyGray()` e
+`frameSharpness()` foram **mantidos e reaproveitados**, só que agora aplicados
+ao recorte já endireitado da carta (para decidir se vale a pena tentar ler)
+em vez de ao frame cru da câmera.
+
+Dentro da identificação em si, a decisão foi manter os dois caminhos que já
+existiam, mas separar por contexto de uso:
+
+- **Botão manual "Capturar" / galeria:** continua chamando `identifyCard()`
+  sem nenhuma mudança — visão do Claude primeiro, OCR local como fallback.
+  Não mexi nisso porque é uma ação explícita e pontual do usuário, e a
+  qualidade da visão vale o custo nesse caso.
+- **Loop silencioso (auto-scan):** passou a usar OCR local (grátis) como
+  fast path e pHash (grátis) como fallback, **sem nunca chamar a visão paga
+  automaticamente**. Isso não estava no pedido original em termos explícitos
+  de custo, mas é uma consequência direta de seguir a especificação (“fast
+  path: OCR... fallback: pHash”) — e evita o problema real que o código
+  antigo tinha: o loop de auto-scan da seção 9 chamava `identifyCard()`
+  (visão primeiro) a cada tentativa automática, ou seja, cada ~2.2s de
+  câmera parada gerava uma chamada paga à Anthropic sem o usuário saber.
+  Documentando aqui porque é uma mudança de comportamento de custo, não só
+  de mecanismo.
+
+Quando o OCR local lê algo utilizável, o resultado entra no
+`handleReading()` já existente (resolve candidatos via `resolveReading` na
+TCGdex, mostra tela de confirmação) — nenhuma duplicação de fluxo. Quando é o
+pHash que acha a carta, como o match já dá o **ID exato** da carta (não um
+nome/número aproximado), criei `handleDirectMatch()` em vez de forçar esse
+resultado pelo `resolveReading()` (que faz busca por nome/número — seria
+redundante e mais lento para um caso em que já se sabe o ID). Ainda assim,
+`handleDirectMatch()` mostra a tela de confirmação com a carta encontrada em
+vez de pular direto para o detalhe — decisão deliberadamente conservadora,
+porque pHash pode errar (falso positivo) e o banco de hashes hoje está vazio
+por padrão (10.5), então essa via ainda não tem validação de qualidade em
+produção.
+
+### 10.4. OpenCV.js: contorno, ordenação de pontos, warp
+
+`scanner.js` ganhou:
+
+- `loadOpenCv()` — carregamento sob demanda (só quando o scanner abre), do
+  build oficial `https://docs.opencv.org/4.9.0/opencv.js` (~10MB de
+  asm.js/WASM, testado ao vivo: `curl -I` respondeu `200`, `Content-Length:
+  10257309`). Mesmo padrão de carregamento dinâmico que o Tesseract.js já
+  usava — não pesa no carregamento inicial do app.
+- `detectCardQuad(cv, canvas)` — cinza → blur gaussiano → Canny →
+  dilatação → `findContours` → para cada contorno, `approxPolyDP` e fica
+  com o maior quadrilátero convexo que passe de 5% da área do frame. Devolve
+  os 4 pontos (já ordenados) e a fração de área ocupada.
+- `orderQuadPoints()` — ordena 4 pontos quaisquer como
+  topo-esquerda/topo-direita/baixo-direita/baixo-esquerda (por soma e
+  diferença de coordenadas — algoritmo padrão para essa tarefa), necessário
+  porque `approxPolyDP` não garante nenhuma ordem específica.
+- `warpCardPerspective(cv, canvas, quad, outW, outH)` — usa
+  `getPerspectiveTransform` e `warpPerspective` para endireitar o
+  quadrilátero detectado num retângulo 300×420 (proporção 2.5:3.5, igual à
+  de uma carta física).
+- `quadsAreStable()` — compara dois quads consecutivos (deslocamento do
+  centro + variação de área, ambos como fração da maior dimensão do frame)
+  para decidir se a carta está "parada" — substitui o `frameDiff()` antigo
+  com um sinal muito mais direto (é literalmente "o contorno da carta não se
+  moveu", não "os pixels do frame inteiro não mudaram muito").
+
+Cuidado de implementação: todo `cv.Mat`/`MatVector` criado dentro dessas
+funções é explicitamente `.delete()`ado (`try/finally`) — o WASM do
+OpenCV.js não tem coletor de lixo automático para esses objetos, e como o
+loop roda a cada 400ms indefinidamente enquanto o scanner está aberto, um
+vazamento aqui cresceria o heap do WASM continuamente até travar o
+navegador. Validado indiretamente no teste da seção 10.7 (o loop rodou ~15s
+seguidos sem erro nem sinais de degradação).
+
+Mapeamento de coordenadas: a detecção roda sobre um frame reduzido
+(`detectMaxDim: 320`, o maior lado; requisito pedia 320×240, usei o maior
+lado para não distorcer a proporção real do vídeo). Para o warp final, os
+pontos do quad são reescalados de volta para a resolução plena do frame
+capturado (`scaleQuadPoints`) antes de endireitar — a detecção é barata e
+roda em baixa resolução, mas o recorte que alimenta OCR/pHash usa a imagem
+em resolução mais alta disponível, para não perder nitidez de texto.
+
+### 10.5. Banco de pHash: `phash.js` (puro) + worker + IndexedDB + script offline
+
+`deploy/js/phash.js` implementa o algoritmo pHash clássico (o mesmo da
+biblioteca de referência `imagehash.phash` em Python: imagem 32×32 em cinza
+→ DCT 2D → os 8×8 coeficientes de frequência mais baixa → 1 bit por
+coeficiente comparado à mediana do bloco → hash de 64 bits). Escrito sem
+nenhuma dependência de DOM nem de Node — só matemática pura — exatamente
+para poder ser importado tanto pelo navegador (`phash-worker.js`, rodando
+num Web Worker) quanto pelo script offline em Node
+(`tools/build-phash-db.mjs`). Isso garante que um hash calculado offline por
+um script Node é diretamente comparável (mesma distância de Hamming
+significa a mesma coisa) a um hash calculado ao vivo no celular — sem essa
+garantia, o banco pré-computado seria inútil.
+
+**Validação real do algoritmo** (não só "o código não deu erro" — conferi
+que a matemática funciona): como não há acesso a imagens reais da TCGdex
+nesta sessão (10.2), gerei duas imagens sintéticas em SVG simulando uma
+"carta" (retângulo + círculo + texto), uma delas com leve deslocamento e
+ruído/blur simulando uma segunda foto da mesma carta, e uma terceira
+claramente diferente (símbolo bem deslocado). Rodando o pipeline completo
+(`sharp` redimensiona para 32×32 em cinza → `computePHash` → `findClosest`):
+a variação "ruidosa" da mesma carta ficou a **distância de Hamming 6** do
+original, contra **distância 30** para a carta diferente, e `findClosest`
+identificou corretamente o candidato certo como melhor match. Isso confirma
+que o algoritmo distingue "mesma carta, foto diferente" de "carta diferente"
+antes de depender dele com dados reais.
+
+Três peças novas:
+
+- **`phash-worker.js`** (Web Worker, `type: 'module'`): recebe mensagens
+  `match` (calcula o hash de uma grade 32×32 recebida da thread principal e
+  compara contra o banco pré-computado + o cache do IndexedDB, devolve os
+  candidatos mais próximos) e `learn` (calcula e grava um hash no
+  IndexedDB). Todo o cálculo pesado (DCT + comparação) fica fora da thread
+  de UI — é o requisito 5 do pedido.
+- **`phash-db.js`**: wrapper na thread principal — cria o worker uma vez,
+  correlaciona `postMessage`/resposta por `requestId`, expõe
+  `matchCardImage()`/`learnCard()` como Promises simples para o `app.js` usar.
+- **`tools/build-phash-db.mjs`**: script Node standalone que busca as
+  coleções da TCGdex, baixa a imagem oficial ("low.png") de cada carta,
+  usa `sharp` para decodificar/redimensionar/converter para cinza 32×32, e
+  calcula o hash com o mesmo `computePHash` do navegador. Incremental (não
+  recalcula cartas que já estão no arquivo de saída) e com concorrência
+  limitada. **Nunca rodado contra a API de verdade nesta sessão** — sem
+  acesso a `api.tcgdex.net` (10.2) — e isso é dito explicitamente no próprio
+  cabeçalho do script, não só aqui. Uma incerteza documentada no código: não
+  pude confirmar ao vivo se `GET /v2/{lang}/sets/{id}` embute o campo
+  `image` em cada carta do resumo ou só nos detalhes completos — por
+  segurança, o script busca a carta completa (`/cards/{id}`) sempre que
+  `image` não vem no resumo, em vez de assumir uma coisa e falhar em
+  silêncio se a suposição estiver errada.
+
+`deploy/data/card-hashes.json` começa como `[]` neste repositório — não
+inventei entradas de exemplo nem fabriquei hashes de cartas que eu não
+processei de verdade.
+
+**Aprendizado incremental client-side** (a parte que reduz a dependência do
+script): toda vez que `loadCardDetail()` carrega uma carta, `app.js` chama
+`learnCardHashInBackground(card)`, que baixa a **imagem oficial** da carta
+(`cardImage(card, 'low')`, servida pela TCGdex com CORS aberto — por isso
+`loadImageUrl()` usa `img.crossOrigin = 'anonymous'`, necessário para depois
+poder ler os pixels via `getImageData` sem o navegador bloquear o canvas por
+"tainted canvas") e ensina o hash dela ao worker, que grava no IndexedDB.
+Deliberadamente hasheia sempre a imagem oficial, nunca a foto tirada pela
+câmera — misturar hash de foto de câmera (com iluminação/ruído/ângulo
+específicos de uma única captura) com hash de imagem de referência
+degradaria a qualidade do banco em vez de crescer ele de forma útil. Isso
+roda em segundo plano (fire-and-forget, erros engolidos silenciosamente) e
+nunca bloqueia nem pode quebrar a tela de detalhe.
+
+### 10.6. Integração com a UI: overlay de contorno, câmera, botão manual
+
+`index.html` ganhou um `<canvas id="contour-canvas">` posicionado sobre o
+vídeo (`position: absolute; inset: 0`), desenhado a cada tick do loop de
+auto-scan. A guia fixa antiga (`#scan-box`, a moldura pontilhada) foi mantida
+como referência visual sutil (opacidade da vinheta reduzida de `.52` para
+`.28`, borda mudada para tracejada) — preservação deliberada de UI que já
+funcionava (regra 3), só ajustada porque agora a carta pode ser detectada em
+qualquer posição do quadro, não só dentro daquela moldura fixa.
+
+O mapeamento de coordenadas do contorno (detectado num canvas reduzido, em
+resolução "crua" do vídeo) para a posição desenhada na tela precisa levar em
+conta que o `<video>` usa `object-fit: cover` (corta e escala, não é uma
+correspondência 1:1 entre pixel do vídeo e pixel da tela) — implementei
+`videoDisplayRect()` em `app.js` com a matemática padrão desse mapeamento
+(comparando proporção do vídeo com proporção da caixa exibida) para os
+pontos do contorno caírem no lugar certo em qualquer tamanho de tela/vídeo.
+
+O botão "Capturar" manual ganhou um pequeno aproveitamento do pipeline novo:
+se um recorte já endireitado (`lastWarpedCanvas`) foi gerado há menos de
+1.5s, ele é usado no lugar do frame cru — melhora o enquadramento enviado
+para `identifyCard()` sem mudar o comportamento quando não há warp recente
+disponível (fallback automático para `captureFrame()`, igual a antes).
+
+### 10.7. Testes realizados nesta etapa
+
+**Sintaxe:** todos os módulos novos/alterados (`phash.js`, `phash-worker.js`,
+`phash-db.js`, `scanner.js`, `app.js`, `tools/build-phash-db.mjs`) passaram
+por `node --check` sem erro.
+
+**Matemática do pHash validada de ponta a ponta** com `sharp` + imagens
+sintéticas — ver 10.5 (distância 6 vs. 30, candidato certo identificado
+como melhor match).
+
+**Dependências:** `npm install` com `sharp` como nova devDependency. A
+primeira tentativa (`sharp@^0.33.5`) instalou limpo mas `npm audit` acusou 1
+vulnerabilidade alta (CVEs em `libvips`/`libheif` vendorizados pelo próprio
+pacote) — troquei para `sharp@^0.35.4` (a versão que o próprio `npm audit`
+indicou como corrigida) e o audit ficou limpo (`found 0 vulnerabilities`).
+Efeito colateral: `sharp@0.35.x` usa import attributes de JSON
+(`import pkg from "./package.json" with { type: "json" }`), que exigem
+Node ≥ 20.10 — o Node instalado neste ambiente é 20.9.0 e falhou nesse ponto
+exato ao tentar `import`. Para não deixar a validação da matemática do pHash
+sem teste por causa disso, reinstalei temporariamente `sharp@0.33.5` só
+para rodar o teste local, confirmei o resultado, e restaurei
+`sharp@^0.35.4` (a versão de verdade, sem a vulnerabilidade) no
+`package.json`/lockfile antes de terminar — documentado também no cabeçalho
+de `tools/build-phash-db.mjs` e como `engines.node` em `package.json`, para
+quem for rodar o script de verdade saber que precisa de Node mais novo.
+
+**Navegador real, com câmera falsa** (mesma técnica da seção 9 — Chromium
+via Playwright com `--use-fake-device-for-media-stream`, já que este
+ambiente não tem câmera física): subi `netlify dev` servindo `deploy/` de
+verdade e, com um script Playwright, verifiquei ao vivo:
+
+- A câmera abre e o `<video>` recebe stream (1920×1080).
+- **OpenCV.js carrega de verdade** (`window.cv.Mat` fica disponível) —
+  confirma que o `<script>` dinâmico e o `onRuntimeInitialized` funcionam
+  num navegador real, não só no papel.
+- O loop de auto-scan roda repetidamente por ~15s sem nenhum erro de
+  console/página — nem os de `cv.Mat` não liberado, nem de outro tipo. O
+  padrão sintético do Chromium não gerou nenhum quadrilátero aceito pelo
+  detector (status ficou em "🔍 Procurando carta..." o tempo todo) — é o
+  comportamento correto quando não há uma carta de verdade no quadro, e
+  mostra que o gatilho não dispara em falso sobre ruído.
+- O `<canvas id="contour-canvas">` é redimensionado corretamente
+  (`1280×497` em device pixels, batendo com o viewport de teste × DPR).
+- **O Web Worker de pHash responde corretamente**: enviei uma mensagem
+  `match` com uma grade cinza-sólida sintética (32×32) através de
+  `phash-db.js` de dentro da própria página e recebi de volta um array de
+  matches (vazio, porque o banco está vazio — 10.5) sem nenhum erro. Isso
+  confirma, num navegador real: o `Worker` com `type: 'module'` carrega,
+  `import` dentro do worker funciona, o `fetch` de `card-hashes.json`
+  funciona, e o acesso a IndexedDB dentro do worker funciona.
+- Zero erros de `console.error`/`pageerror` durante toda a sessão de teste.
+
+**O que isso prova e o que não prova** (mesma ressalva da seção 9, repetida
+porque continua verdadeira): prova que o mecanismo — carregamento,
+agendamento do loop, gestão de memória do OpenCV, overlay, worker — funciona
+sem travar ou vazar recursos. **Não prova qualidade de detecção real**
+(contorno de carta física, iluminação real, ângulos variados) nem qualidade
+de matching de pHash com dados reais, porque nem uma câmera física nem o
+banco de hashes populado estavam disponíveis nesta sessão. Só uso real em
+celular, com uma carta física e (idealmente) o banco de hashes gerado,
+valida isso.
+
+### 10.8. O que fica pendente, honestamente
+
+- Rodar `npm run build:phash-db` numa máquina com acesso à internet livre e
+  Node ≥ 20.10, e confirmar que a suposição sobre o formato da resposta de
+  `/sets/{id}` (10.5) está certa.
+- Calibrar `AUTO_SCAN_THRESHOLDS` (`minQuadAreaFraction`,
+  `stableFramesNeeded`, `centroidEpsFraction`, `areaRatioEpsFraction`,
+  `sharpnessMin`, `phashMaxDistance`) contra uso real em celular — os
+  valores atuais são os mesmos "escolhidos por raciocínio, não medidos"
+  que já valiam para os limiares antigos.
+- Validar a taxa de acerto do pHash como fallback de verdade, depois que o
+  banco tiver cobertura real (script ou uso orgânico via
+  `learnCardHashInBackground`).
